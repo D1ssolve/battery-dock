@@ -115,8 +115,8 @@ class PackagingTests(unittest.TestCase):
             with zipfile.ZipFile(archive) as bundle:
                 prefix = 'BatteryDock-0.4.0-Windows-x64/'
                 self.assertEqual(json.loads(bundle.read(prefix + 'BUILD-INFO.json'))['version'], '0.4.0')
-                self.assertEqual(bundle.read(prefix + 'requirements-resolved.txt').decode(),
-                                 'ExampleDependency==99.8.7\n')
+                self.assertEqual(bundle.read(prefix + 'requirements-resolved.txt').decode().splitlines(),
+                                 ['ExampleDependency==99.8.7'])
                 self.assertIn(prefix + 'third-party-notices/ExampleDependency-99.8.7/METADATA.txt',
                               bundle.namelist())
                 for path in ('BatteryDock.exe', 'LICENSE', 'source/run.py',
