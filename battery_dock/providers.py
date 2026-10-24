@@ -7,6 +7,8 @@ See docs/PROTOCOLS.md for provenance, packet formats and hardware limitations.
 from __future__ import annotations
 
 import re
+import hashlib
+from .calibration import CalibrationStore, CalibrationError
 from .core import DeviceReading
 
 AEROX = {0x1858: 0xD2, 0x185A: 0x92, 0x1874: 0xD2, 0x1876: 0x92}
@@ -136,7 +138,8 @@ def _exchange(device, request: bytes, parser):
 
 
 class HardwareProvider:
-    def __init__(self):
+    def __init__(self, calibration_store: CalibrationStore | None = None):
+        self.calibration_store = calibration_store if calibration_store is not None else CalibrationStore()
         self._hid = None
         self._import_error = ''
         try:
@@ -186,8 +189,28 @@ class HardwareProvider:
                         result = _exchange(device, request, lambda p: parse_g733(p, feature))
                         if result is not None:
                             percent, charging, mv, status = result
+                            key = 'g733:' + hashlib.sha256(device_id.encode('utf-8')).hexdigest()
+                            calibration_detail = 'без калибровки'
+                            try:
+                                profile = self.calibration_store.profile(key)
+                                if status != 'разряд':
+                                    calibration_detail = 'без калибровки: не подтверждён разряд'
+                                elif profile is not None:
+                                    calibrated = profile.estimate(mv)
+                                    if calibrated is not None:
+                                        percent = calibrated
+                                        calibration_detail = 'по ручному эталону G HUB, не истинная ёмкость'
+                                    elif not profile.ready:
+                                        calibration_detail = 'без калибровки: ' + profile.reason
+                                    else:
+                                        calibration_detail = 'без калибровки: вне измеренного диапазона'
+                            except CalibrationError:
+                                calibration_detail = 'без калибровки: профиль недоступен'
                             readings.append(DeviceReading(device_id, name, percent, charging,
-                                detail=f'≈ оценка по напряжению · {mv} мВ · {status}', estimated=True))
+                                detail=f'≈ оценка по напряжению · {mv} мВ · {status} · {calibration_detail}',
+                                estimated=True, voltage_mv=mv,
+                                calibration_key=key,
+                                discharging=True if status == 'разряд' else (False if charging is not None else None)))
                 if not any(r.device_id == device_id for r in readings):
                     readings.append(DeviceReading(device_id, name, connected=True,
                         detail='USB-интерфейс найден, нет ответа батареи: сон, питание выключено или протокол не поддержан'))

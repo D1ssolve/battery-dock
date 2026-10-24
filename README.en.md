@@ -10,6 +10,14 @@ An independent **Windows 11 prototype inspired by BatteryOnPC** that displays wi
 
 Version 0.1.1 fixes Windows padded HID write handling and separates unreadable battery data from a disconnected endpoint. Its hardware result still needs confirmation. Version 0.2.0 adds the plugin API below; select its successful CI artifact for plugin support.
 
+## Version 0.3.0: calibration and device-only tray
+
+The separate Battery Dock tray icon is removed. Every device icon exposes Open, Settings, Plugins, Calibration, Refresh and Exit. If no usable device icon exists, the dashboard remains accessible instead of leaving an invisible process.
+
+Use the G733 calibration window to capture a fresh discharging voltage and manually enter the corresponding G HUB percentage. A profile activates only after at least three consistent points covering 20 percentage points and 100 mV. Interpolation is limited to the measured range while discharging; other states use the explicitly marked generic estimate. Profiles stay local and no G HUB API is accessed. This matches entered reference estimates, not true battery capacity.
+
+See [calibration details](docs/CALIBRATION.md).
+
 ## Version 0.2.0: device-provider plugins
 
 Use the **«Плагины» (Plugins)** window to register a local manifest. New plugins are disabled until you explicitly approve running their code. There is no automatic download or marketplace. **Plugins run with your full user privileges, not in a sandbox.** Built-in privacy/no-network statements do not apply to third-party code.

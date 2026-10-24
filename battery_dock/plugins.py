@@ -116,6 +116,9 @@ def validate_readings(values, plugin_id):
             or any(ord(c) < 32 for c in value.name + value.detail)
             or type(value.connected) is not bool or type(value.estimated) is not bool
             or (value.charging is not None and type(value.charging) is not bool)
+            or value.calibration_key is not None
+            or value.discharging is not None
+            or (value.voltage_mv is not None and (type(value.voltage_mv) is not int or not 1 <= value.voltage_mv <= 65535))
             or (value.percent is not None and (type(value.percent) is not int or not 0 <= value.percent <= 100))):
             raise ValueError('Invalid reading fields')
         seen.add(value.device_id)

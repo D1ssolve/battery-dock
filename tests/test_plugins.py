@@ -23,6 +23,15 @@ def create_provider():
 
 
 class PluginTests(unittest.TestCase):
+    def test_plugin_cannot_claim_builtin_calibration(self):
+        with self.assertRaises(ValueError):
+            validate_readings([DeviceReading('mouse', 'DEMO', 50,
+                                             calibration_key='a' * 64)], 'test.example')
+        value = validate_readings([DeviceReading('mouse', 'DEMO', 50,
+                                                voltage_mv=3770)], 'test.example')[0]
+        self.assertEqual(value.voltage_mv, 3770)
+        self.assertIsNone(value.calibration_key)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -201,9 +210,10 @@ class PluginTests(unittest.TestCase):
         import sys
         from unittest.mock import patch
         app = App.__new__(App)
-        app.tray = Mock()
+        app.root = Mock()
         icon = Mock()
         app.device_icons = {'plugin:test.example:mouse': icon}
+        app.pending_icons = {}
         app.readings = {}
         app.settings = Mock(per_device_icons=True)
         with patch.dict(sys.modules, {'pystray': Mock()}):

@@ -15,10 +15,17 @@ class DeviceReading:
     connected: bool = True
     detail: str = ''
     estimated: bool = False
+    voltage_mv: int | None = None
+    calibration_key: str | None = None
+    discharging: bool | None = None
 
     def __post_init__(self):
         if self.percent is not None and (type(self.percent) is not int or not 0 <= self.percent <= 100):
             raise ValueError('Battery percentage must be an integer from 0 to 100 or None')
+        if self.voltage_mv is not None and (type(self.voltage_mv) is not int or not 0 <= self.voltage_mv <= 65535):
+            raise ValueError('Voltage must be an integer from 0 to 65535 or None')
+        if self.discharging is not None and type(self.discharging) is not bool:
+            raise ValueError('Discharging must be a boolean or None')
 
 @dataclass
 class Settings:
@@ -88,7 +95,7 @@ class AlertPolicy:
 
 
 def merge_readings(previous: dict[str, DeviceReading], current: list[DeviceReading]):
-    result = {key: replace(value, connected=False, percent=None, charging=None,
+    result = {key: replace(value, connected=False, percent=None, charging=None, voltage_mv=None, calibration_key=None, discharging=None,
                            detail='Устройство не обнаружено') for key, value in previous.items()}
     result.update({value.device_id: value for value in current})
     return result

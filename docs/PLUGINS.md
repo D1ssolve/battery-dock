@@ -79,6 +79,9 @@ The entrypoint exports `create_provider()` with no arguments. It returns an obje
 | `connected` | Boolean; receiver presence alone may not prove the wireless device is connected |
 | `detail` | Status text up to 1,000 characters, no control characters; omit serials, USB paths, secrets, and personal data |
 | `estimated` | Boolean; `True` for inferred/voltage-derived percentages |
+| `voltage_mv` | Optional integer 1–65535 containing raw battery millivolts; default `None` |
+| `calibration_key` | Reserved for built-in G733 calibration; plugins must leave it `None` |
+| `discharging` | Reserved for the built-in calibration eligibility check; leave `None` |
 
 Battery Dock namespaces the local ID as `plugin:<manifest-id>:<device-id>` to prevent collisions with other plugins and built-ins. Do not add that prefix yourself. Use stable opaque IDs rather than raw USB paths or serial numbers. Duplicate IDs or invalid readings reject that plugin's polling result. An absent reading becomes unavailable rather than preserving an old percentage as current.
 
