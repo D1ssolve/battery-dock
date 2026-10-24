@@ -1,0 +1,2 @@
+"""Battery Dock — local wireless peripheral battery monitor."""
+__version__ = '0.1.0'
