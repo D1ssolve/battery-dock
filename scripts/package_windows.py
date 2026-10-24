@@ -81,8 +81,8 @@ def package() -> Path:
     exe = ROOT / 'dist' / 'BatteryDock.exe'
     if not exe.is_file() or exe.read_bytes()[:2] != b'MZ':
         raise RuntimeError('Build dist/BatteryDock.exe before packaging.')
-    version = package_version()
-    bundle = ROOT / 'dist' / f'BatteryDock-{version}-Windows-x64'
+    app_version = package_version()
+    bundle = ROOT / 'dist' / f'BatteryDock-{app_version}-Windows-x64'
     if bundle.exists():
         shutil.rmtree(bundle)
     bundle.mkdir()
@@ -102,9 +102,9 @@ def package() -> Path:
     notices.mkdir()
     installed = []
     for dist in sorted(metadata.distributions(), key=lambda d: d.metadata['Name'].lower()):
-        name, version = dist.metadata['Name'], dist.version
-        installed.append(f'{name}=={version}')
-        target = notices / f'{name}-{version}'
+        name, dist_version = dist.metadata['Name'], dist.version
+        installed.append(f'{name}=={dist_version}')
+        target = notices / f'{name}-{dist_version}'
         target.mkdir(exist_ok=True)
         (target / 'METADATA.txt').write_text(dist.read_text('METADATA') or str(dist.metadata), encoding='utf-8')
         for entry in dist.files or []:
@@ -132,7 +132,7 @@ def package() -> Path:
     sources = bundle / 'third-party-source'
     sources.mkdir()
     provenance = [dependency_source(name, sources) for name in SOURCE_PACKAGES]
-    manifest = {'version': version, 'commit': os.environ.get('GITHUB_SHA', 'local-build'),
+    manifest = {'version': app_version, 'commit': os.environ.get('GITHUB_SHA', 'local-build'),
                 'python': platform.python_version(), 'platform': platform.platform(),
                 'dependencies': provenance}
     (bundle / 'BUILD-INFO.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')

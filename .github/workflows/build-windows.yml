@@ -135,20 +135,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid application release version.'; exit 1; }
           cd package
           archive="BatteryDock-${RELEASE_VERSION}-Windows-x64.zip"
           sha256sum --check "$archive.sha256"
           info=$(unzip -p "$archive" "BatteryDock-${RELEASE_VERSION}-Windows-x64/BUILD-INFO.json")
-          test "$(printf '%s' "$info" | jq -r '.version')" = "$RELEASE_VERSION"
-          test "$(printf '%s' "$info" | jq -r '.commit')" = "$RELEASE_SHA"
+          package_version=$(printf '%s' "$info" | jq -r '.version')
+          test "$package_version" = "$RELEASE_VERSION" || {
+            echo "BUILD-INFO version mismatch: expected $RELEASE_VERSION, found $package_version"; exit 1;
+          }
+          package_commit=$(printf '%s' "$info" | jq -r '.commit')
+          test "$package_commit" = "$RELEASE_SHA" || {
+            echo "BUILD-INFO commit mismatch: expected $RELEASE_SHA, found $package_commit"; exit 1;
+          }
           tag="v$RELEASE_VERSION"
           # Refuse every existing tag (including lightweight/annotated tags).
           # No force pushes, asset replacement, or edits to existing releases.
           matches=$(gh api "repos/$GH_REPO/git/matching-refs/tags/$tag" --jq "[.[] | select(.ref == \"refs/tags/$tag\")] | length")
           test "$matches" = 0 || { echo 'Tag already exists; choose a new version.'; exit 1; }
           unzip -p "$archive" "BatteryDock-${RELEASE_VERSION}-Windows-x64/docs/RELEASE-NOTES.md" > notes.txt
-          test "$(head -n 1 notes.txt)" = "# Battery Dock $RELEASE_VERSION"
+          test "$(head -n 1 notes.txt | tr -d '\r')" = "# Battery Dock $RELEASE_VERSION" || {
+            echo "Release notes heading does not match application version $RELEASE_VERSION"; exit 1;
+          }
           printf '\nTested build commit: `%s`.\n' "$RELEASE_SHA" >> notes.txt
           # Stage assets in a draft so a failed upload cannot publish an empty release.
           gh release create "$tag" "$archive" "$archive.sha256" \

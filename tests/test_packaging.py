@@ -4,6 +4,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -99,9 +100,12 @@ class PackagingTests(unittest.TestCase):
             (root / 'battery_dock/__init__.py').write_text("__version__ = '0.4.0'\n")
             (root / 'dist/BatteryDock.exe').write_bytes(b'MZfixture-not-an-executable')
             (root / '.github/workflow.yml').write_text('fixture', encoding='utf-8')
+            installed_dist = SimpleNamespace(
+                metadata={'Name': 'ExampleDependency'}, version='99.8.7', files=[],
+                read_text=lambda name: 'Name: ExampleDependency\nVersion: 99.8.7\n')
             with patch.object(packaging, 'ROOT', root), patch.object(packaging.sys, 'platform', 'win32'), patch.object(
                 packaging.sys, 'base_prefix', str(root)
-            ), patch.object(packaging.metadata, 'distributions', return_value=[]), patch.object(
+            ), patch.object(packaging.metadata, 'distributions', return_value=[installed_dist]), patch.object(
                 packaging, 'dependency_source', return_value={'source': 'fixture'}
             ):
                 archive = packaging.package()
@@ -111,6 +115,10 @@ class PackagingTests(unittest.TestCase):
             with zipfile.ZipFile(archive) as bundle:
                 prefix = 'BatteryDock-0.4.0-Windows-x64/'
                 self.assertEqual(json.loads(bundle.read(prefix + 'BUILD-INFO.json'))['version'], '0.4.0')
+                self.assertEqual(bundle.read(prefix + 'requirements-resolved.txt').decode(),
+                                 'ExampleDependency==99.8.7\n')
+                self.assertIn(prefix + 'third-party-notices/ExampleDependency-99.8.7/METADATA.txt',
+                              bundle.namelist())
                 for path in ('BatteryDock.exe', 'LICENSE', 'source/run.py',
                              'source/.github/workflow.yml', 'CHANGELOG.md', 'SUPPORT.md', 'ROADMAP.md',
                              'source/CHANGELOG.md', 'source/SUPPORT.md', 'source/ROADMAP.md', 'README.en.md', 'CONTRIBUTING.md', 'source/README.en.md', 'third-party-notices/Python-LICENSE.txt',
