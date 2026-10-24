@@ -80,7 +80,7 @@ class App:
         tk.Label(self.root, textvariable=self.status, font=('Segoe UI', 9), wraplength=720, justify='left', bg=BG, fg=MUTED).pack(fill='x', padx=28)
         actions = tk.Frame(self.root, bg=BG)
         actions.pack(fill='x', padx=28, pady=20)
-        for text, callback in [('Обновить', self.wakeup.set), ('Настройки', self.preferences), ('Диагностика', self.diagnostics), ('Выход', self.quit)]:
+        for text, callback in [('Обновить', self.wakeup.set), ('Настройки', self.preferences), ('Плагины', self.plugins), ('Диагностика', self.diagnostics), ('Выход', self.quit)]:
             ttk.Button(actions, text=text, command=callback).pack(side='left', padx=(0, 8))
         self.render()
 
@@ -105,6 +105,8 @@ class App:
             while not self.stopping.is_set():
                 try:
                     self.events.put(('readings', self.provider.poll()))
+                    if hasattr(self.provider, 'errors'):
+                        self.events.put(('provider_errors', dict(self.provider.errors)))
                 except Exception as exc:
                     # No raw HID paths, serials, or exception payloads in diagnostics.
                     self.events.put(('error', type(exc).__name__))
@@ -128,10 +130,14 @@ class App:
                     self.show()
                 elif kind == 'readings':
                     self.readings = merge_readings(self.readings, value)
+                    self.prune_disabled_plugins()
                     self.last_update = datetime.now().isoformat(timespec='seconds')
                     self.last_error = ''
                     self.render()
                     self.update_tray()
+                elif kind == 'provider_errors':
+                    self.last_error = ('Провайдеры: ' + '; '.join(f'{key}: {error}' for key, error in value.items())) if value else ''
+                    self.render()
                 elif kind == 'error':
                     self.last_error = f'Не удалось прочитать HID: {value}. Повторим автоматически.'
                     self.readings = merge_readings(self.readings, [])
@@ -241,6 +247,78 @@ class App:
         ttk.Button(frame, text='Сохранить', command=save).grid(row=5, column=0, pady=(18, 0))
         ttk.Button(frame, text='Отмена', command=window.destroy).grid(row=5, column=1, pady=(18, 0))
 
+    def prune_disabled_plugins(self):
+        accepts = getattr(getattr(self, 'provider', None), 'accepts_reading', None)
+        if accepts:
+            self.readings = {key: value for key, value in self.readings.items() if accepts(key)}
+            self.alerts.warned = {key for key in self.alerts.warned if accepts(key)}
+
+    def plugins(self):
+        from .plugins import ProviderRegistry
+        if not isinstance(self.provider, ProviderRegistry):
+            messagebox.showinfo('Плагины', 'В режиме ДЕМО внешние плагины не запускаются.', parent=self.root)
+            return
+        if getattr(self, 'plugin_window', None) and self.plugin_window.winfo_exists():
+            self.plugin_window.lift()
+            return
+        window = self.plugin_window = tk.Toplevel(self.root)
+        window.title('Локальные плагины Battery Dock')
+        window.transient(self.root)
+        frame = ttk.Frame(window, padding=16)
+        frame.pack(fill='both', expand=True)
+        ttk.Label(frame, text='Только доверенные локальные плагины. Добавление не запускает код.\nВключённые плагины запускаются и при следующих запусках приложения.', wraplength=590).pack(anchor='w')
+        listing = tk.Listbox(frame, width=80, height=10, exportselection=False)
+        listing.pack(fill='both', expand=True, pady=12)
+        specs = []
+        def refresh():
+            specs[:] = self.provider.list_plugins()
+            listing.delete(0, 'end')
+            for spec in specs:
+                listing.insert('end', f"{'ВКЛ' if spec.enabled else 'выкл'} · {spec.name} · {spec.id}")
+        def selected():
+            selection = listing.curselection()
+            return specs[selection[0]] if selection else None
+        def perform(action):
+            try:
+                action()
+            except (OSError, ValueError, TypeError) as exc:
+                messagebox.showerror('Плагин не изменён', str(exc), parent=window)
+                return
+            self.prune_disabled_plugins()
+            self.render()
+            self.update_tray()
+            self.wakeup.set()
+            refresh()
+        def add():
+            path = filedialog.askopenfilename(parent=window, title='Выберите manifest.json', filetypes=[('JSON manifest', '*.json')])
+            if path:
+                perform(lambda: self.provider.add(path))
+        def enable():
+            spec = selected()
+            if not spec or spec.enabled:
+                return
+            warning = (f'Включить {spec.name} ({spec.id})?\n\n'
+                       'Это произвольный Python-код с полными правами вашей учётной записи. '
+                       'Песочницы нет: код может читать/изменять файлы, обращаться к сети и устройствам. '
+                       'Ошибка или зависание плагина может нарушить работу приложения.\n\n'
+                       'Проверьте исходный код и его зависимости. Не включайте неизвестные плагины. '
+                       'Разрешение сохраняется для следующих запусков.\n\n' + spec.manifest)
+            if messagebox.askyesno('Доверять и включить?', warning, parent=window, default='no'):
+                perform(lambda: self.provider.enable(spec.id, True))
+        def disable():
+            spec = selected()
+            if spec:
+                perform(lambda: self.provider.enable(spec.id, False))
+        def remove():
+            spec = selected()
+            if spec:
+                perform(lambda: self.provider.remove(spec.id))
+        buttons = ttk.Frame(frame)
+        buttons.pack(fill='x')
+        for title, action in [('Добавить…', add), ('Включить…', enable), ('Отключить', disable), ('Удалить из списка', remove), ('Закрыть', window.destroy)]:
+            ttk.Button(buttons, text=title, command=action).pack(side='left', padx=(0, 5))
+        refresh()
+
     def diagnostics(self):
         path = filedialog.asksaveasfilename(parent=self.root, title='Сохранить диагностику', defaultextension='.json', initialfile='battery-dock-diagnostics.json', filetypes=[('JSON', '*.json')])
         if not path:
@@ -281,11 +359,13 @@ def main():
         provider = DemoProvider()
     else:
         from .providers import HardwareProvider
-        provider = HardwareProvider()
+        from .plugins import ProviderRegistry
+        provider = ProviderRegistry(HardwareProvider())
     if args.diagnose:
         try:
             readings = provider.poll()
             report = {'app_version': __version__, 'os': platform.system(), 'demo': args.demo,
+                      'provider_errors': dict(getattr(provider, 'errors', {})),
                       'devices': [{'name': r.name, 'percent': r.percent, 'connected': r.connected, 'charging': r.charging, 'detail': r.detail, 'estimated': r.estimated} for r in readings]}
             with open(args.diagnose, 'w', encoding='utf-8') as file:
                 json.dump(report, file, ensure_ascii=False, indent=2)

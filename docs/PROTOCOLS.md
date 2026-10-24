@@ -63,7 +63,7 @@ The 64-byte Python request matches SteelMouse's primary request (`req_64`).
 Windows HIDAPI pads it to the descriptor's `OutputReportByteLength` internally;
 its successful return count can therefore be larger than the Python request
 (e.g. 65 rather than 64). Accept counts >= request length, reject shorter or
-negative counts. See [HIDAPI 0.14.0 hid_write](https://github.com/libusb/hidapi/blob/hidapi-0.14.0/windows/hid.c#L929-L994).
+negative counts. See [HIDAPI 0.14.0 hid_write](https://github.com/libusb/hidapi/blob/hidapi-0.14.0/windows/hid.c#L1006-L1078).
 Send report ID `00`, query command, zero padding. Do not probe alternative
 commands, feature-report transports or unrelated interfaces after a failure.
 Parse only replies

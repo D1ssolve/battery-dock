@@ -74,11 +74,11 @@ class PackagingTests(unittest.TestCase):
         # Tests orchestration with fixtures, not Windows/PyInstaller execution.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for name in ('dist', 'battery_dock', 'tests', 'scripts', 'docs', '.github', 'tcl/tcl8.6'):
+            for name in ('dist', 'battery_dock', 'tests', 'scripts', 'docs', '.github', 'examples', 'tcl/tcl8.6'):
                 (root / name).mkdir(parents=True, exist_ok=True)
             for name in ('run.py', 'requirements.txt', 'requirements-build.txt',
                          'build-windows.cmd', 'build-windows.ps1', 'run-windows.cmd',
-                         'README.md', 'LICENSE', '.gitignore', 'LICENSE.txt', 'tcl/tcl8.6/license.terms'):
+                         'README.md', 'README.en.md', 'CONTRIBUTING.md', 'LICENSE', '.gitignore', 'LICENSE.txt', 'tcl/tcl8.6/license.terms'):
                 (root / name).write_text('fixture', encoding='utf-8')
             (root / 'dist/BatteryDock.exe').write_bytes(b'MZfixture-not-an-executable')
             (root / '.github/workflow.yml').write_text('fixture', encoding='utf-8')
@@ -91,7 +91,7 @@ class PackagingTests(unittest.TestCase):
             with zipfile.ZipFile(archive) as bundle:
                 prefix = 'BatteryDock-Windows-x64/'
                 for path in ('BatteryDock.exe', 'LICENSE', 'source/run.py',
-                             'source/.github/workflow.yml', 'third-party-notices/Python-LICENSE.txt',
+                             'source/.github/workflow.yml', 'README.en.md', 'CONTRIBUTING.md', 'source/README.en.md', 'third-party-notices/Python-LICENSE.txt',
                              'third-party-notices/Tcl-Tk/tcl8.6/license.terms', 'BUILD-INFO.json', 'SHA256SUMS.txt'):
                     self.assertIn(prefix + path, bundle.namelist())
                 for line in bundle.read(prefix + 'SHA256SUMS.txt').decode().splitlines():

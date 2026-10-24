@@ -12,7 +12,9 @@ on:
       - "requirements*.txt"
       - "run.py"
       - "build-windows.*"
-      - "README.md"
+      - "README*.md"
+      - "CONTRIBUTING.md"
+      - "examples/**"
       - "LICENSE"
       - ".github/workflows/build-windows.yml"
 
@@ -55,6 +57,8 @@ jobs:
           if ($process.ExitCode -ne 0) { throw 'Frozen executable failed.' }
           $data = Get-Content -Raw $report | ConvertFrom-Json
           if ($data.demo -ne $true) { throw 'Expected a demo diagnostic report.' }
+      - name: Smoke-test opt-in external plugin in frozen executable
+        run: python -m scripts.smoke_plugin_exe
       - name: Package source, licenses and binary
         run: python scripts/package_windows.py
       - name: Upload portable package

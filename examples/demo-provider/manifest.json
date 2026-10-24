@@ -1,0 +1,6 @@
+{
+  "api_version": 1,
+  "id": "demo.example",
+  "name": "DEMO example (fake battery)",
+  "entrypoint": "example.py"
+}

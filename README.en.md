@@ -6,9 +6,20 @@ Windows 11 battery tray monitor prototype for Logitech G733 and SteelSeries Aero
 
 An independent **Windows 11 prototype inspired by BatteryOnPC** that displays wireless peripheral battery levels in the system tray and a separate window. It is not affiliated with BatteryOnPC and does not use its branding, design, or source code.
 
-> **Prototype — unsigned executable, not a validated installer.** Windows CI has passed 31 automated tests and a packaged-EXE demo diagnostic smoke test ([successful build](https://github.com/D1ssolve/battery-dock/actions/runs/40107712769)). This does **not** establish real-device compatibility or complete GUI validation. Hardware feedback on version 0.1.0 reported no usable Aerox 9 battery reading and a G733 estimate that differed from G HUB. G733 percentages are voltage-based estimates, not exact manufacturer readings. Do not disable SmartScreen or antivirus to run this app.
+> **Prototype — unsigned executable, not a validated installer.** Windows CI has passed 35 automated tests and a packaged-EXE demo diagnostic smoke test ([successful build](https://github.com/D1ssolve/battery-dock/actions/runs/40113868062)). This does **not** establish real-device compatibility or complete GUI validation. Hardware feedback on version 0.1.0 reported no usable Aerox 9 battery reading and a G733 estimate that differed from G HUB. G733 percentages are voltage-based estimates, not exact manufacturer readings. Do not disable SmartScreen or antivirus to run this app.
 
-Version 0.1.1 fixes are still pending and are not included in the published 0.1.0 build linked here.
+Version 0.1.1 fixes Windows padded HID write handling and separates unreadable battery data from a disconnected endpoint. Its hardware result still needs confirmation. Version 0.2.0 adds the plugin API below; select its successful CI artifact for plugin support.
+
+## Version 0.2.0: device-provider plugins
+
+Use the **«Плагины» (Plugins)** window to register a local manifest. New plugins are disabled until you explicitly approve running their code. There is no automatic download or marketplace. **Plugins run with your full user privileges, not in a sandbox.** Built-in privacy/no-network statements do not apply to third-party code.
+
+- [Plugin API and trust model](docs/PLUGINS.md)
+- [Contributor guide](CONTRIBUTING.md)
+- [Device protocol research and limitations](docs/HARDWARE.md)
+- [Opt-in DEMO plugin](examples/demo-provider/manifest.json) (fake battery values only)
+
+The Windows workflow additionally exercises external-plugin loading in the frozen EXE: disabled, explicitly enabled, changed-after-approval, and disabled again. Check the exact commit’s CI status; these checks do not validate physical hardware or the interactive GUI.
 
 ## Features
 
@@ -59,7 +70,7 @@ Windows may place new tray icons in its overflow menu. Enable Battery Dock icons
 
 ## Download a Windows build
 
-Open the [successful Windows build](https://github.com/D1ssolve/battery-dock/actions/runs/40107712769) and download its `BatteryDock-Windows-x64-<number>` artifact from the **Artifacts** section. GitHub may require you to sign in. Artifacts are retained for 30 days; if this one has expired, check [Build Windows EXE runs](https://github.com/D1ssolve/battery-dock/actions/workflows/build-windows.yml) for a newer successful build.
+Open the [successful Windows build](https://github.com/D1ssolve/battery-dock/actions/runs/40113868062) and download its `BatteryDock-Windows-x64-<number>` artifact from the **Artifacts** section. GitHub may require you to sign in. Artifacts are retained for 30 days; if this one has expired, check [Build Windows EXE runs](https://github.com/D1ssolve/battery-dock/actions/workflows/build-windows.yml) for a newer successful build.
 
 The artifact contains a ZIP with `BatteryDock.exe`, a README, the license, application source, dependency licenses, and dependency source archives (a complete pure-Python wheel containing source for pystray). Extract the ZIP before running the app. Python does not need to be installed on the destination computer. This is a CI artifact, **not a GitHub Release or signed installer**. Do not redistribute the EXE without the accompanying source and licenses.
 

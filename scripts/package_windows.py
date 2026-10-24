@@ -76,16 +76,16 @@ def package() -> Path:
         shutil.rmtree(bundle)
     bundle.mkdir()
     shutil.copy2(exe, bundle / exe.name)
-    for filename in ('README.md', 'LICENSE'):
+    for filename in ('README.md', 'README.en.md', 'CONTRIBUTING.md', 'LICENSE'):
         shutil.copy2(ROOT / filename, bundle / filename)
     shutil.copytree(ROOT / 'docs', bundle / 'docs')
     source = bundle / 'source'
     source.mkdir()
-    for name in ('battery_dock', 'tests', 'scripts', 'docs', '.github'):
+    for name in ('battery_dock', 'tests', 'scripts', 'docs', '.github', 'examples'):
         shutil.copytree(ROOT / name, source / name, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     for name in ('run.py', 'requirements.txt', 'requirements-build.txt',
                  'build-windows.cmd', 'build-windows.ps1', 'run-windows.cmd',
-                 'README.md', 'LICENSE', '.gitignore'):
+                 'README.md', 'README.en.md', 'CONTRIBUTING.md', 'LICENSE', '.gitignore'):
         shutil.copy2(ROOT / name, source / name)
     notices = bundle / 'third-party-notices'
     notices.mkdir()
