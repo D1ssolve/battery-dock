@@ -14,6 +14,7 @@ class DeviceReading:
     charging: bool | None = None
     connected: bool = True
     detail: str = ''
+    estimated: bool = False
 
     def __post_init__(self):
         if self.percent is not None and (type(self.percent) is not int or not 0 <= self.percent <= 100):
@@ -98,4 +99,4 @@ def label(reading: DeviceReading) -> str:
         return 'Отключено'
     if reading.percent is None:
         return 'Нет данных'
-    return f'{reading.percent}%' + (' · зарядка' if reading.charging else '')
+    return ('≈ ' if reading.estimated else '') + f'{reading.percent}%' + (' · зарядка' if reading.charging else '')

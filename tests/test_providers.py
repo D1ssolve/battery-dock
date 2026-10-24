@@ -87,6 +87,45 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNone(_exchange(device, b'\0\xd2', lambda p: parse_aerox(p, 0xD2)))
         self.assertEqual(device.read_count, 9)
 
+    def test_windows_padded_write_is_success(self):
+        device = FakeDevice([[0xD2, 18]])
+        with patch.object(device, 'write', return_value=65):
+            self.assertEqual(_exchange(device, bytes((0, 0xD2)) + bytes(62),
+                                       lambda p: parse_aerox(p, 0xD2)), (85, False))
+        self.assertEqual(device.read_count, 2)
+
+    def test_short_or_failed_write_stops_before_reply(self):
+        for count in (-1, 0, 63):
+            device = FakeDevice([[0xD2, 18]])
+            with patch.object(device, 'write', return_value=count):
+                with self.assertRaises(OSError) as context:
+                    _exchange(device, bytes(64), lambda p: p)
+            self.assertEqual(context.exception.stage, 'write')
+            self.assertEqual(context.exception.written, count)
+            self.assertEqual(device.read_count, 1)
+
+    def test_error_stages_and_native_code_are_sanitized(self):
+        for stage in ('drain', 'read', 'write'):
+            device = FakeDevice()
+            native = r'WriteFile: (0x00000005) private serial user path'
+            device.error = lambda: native
+            if stage == 'write':
+                device.write = lambda data: -1
+            else:
+                original_read = device.read
+                def failing_read(length, timeout):
+                    if (stage == 'drain' and timeout == 1) or (stage == 'read' and timeout == 100):
+                        raise OSError('private serial user path')
+                    return original_read(length, timeout)
+                device.read = failing_read
+            with self.assertRaises(OSError) as context:
+                _exchange(device, bytes(64), lambda p: p)
+            error = context.exception
+            self.assertEqual(error.stage, stage)
+            self.assertEqual(error.native_code, '00000005')
+            self.assertIn(stage, error.detail())
+            self.assertNotIn('private', error.detail())
+
     def test_poll_mouse_closes_handle_and_sends_only_query(self):
         device = FakeDevice([[0xD2, 18]])
         provider = HardwareProvider()
@@ -106,6 +145,7 @@ class ProtocolTests(unittest.TestCase):
         reading = provider.poll()[0]
         self.assertTrue(reading.connected)
         self.assertIn('оценка', reading.detail)
+        self.assertTrue(reading.estimated)
         self.assertEqual(device.writes[0][:6], bytes([0x11, 0xFF, 0, 0x0E, 0x1F, 0x20]))
         self.assertEqual(device.writes[1][:4], bytes([0x11, 0xFF, 9, 0x0E]))
         self.assertTrue(device.closed)
@@ -116,7 +156,7 @@ class ProtocolTests(unittest.TestCase):
         provider._hid = FakeHid([dict(vendor_id=0x1038, product_id=0x1858,
                                     interface_number=3, path=b'mouse')], [device])
         reading = provider.poll()[0]
-        self.assertFalse(reading.connected)
+        self.assertTrue(reading.connected)
         self.assertIsNone(reading.percent)
         self.assertTrue(device.closed)
 
@@ -127,8 +167,9 @@ class ProtocolTests(unittest.TestCase):
                                     interface_number=3, path=b'mouse')], [device])
         with patch.object(device, 'open_path', side_effect=OSError('access denied')):
             reading = provider.poll()[0]
-        self.assertFalse(reading.connected)
+        self.assertTrue(reading.connected)
         self.assertIn('OSError', reading.detail)
+        self.assertIn('этап open', reading.detail)
         self.assertNotIn('access denied', reading.detail)
         self.assertTrue(device.closed)
 

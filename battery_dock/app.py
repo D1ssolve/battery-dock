@@ -19,17 +19,19 @@ MUTED = '#9aaac0'
 ACCENT = '#81e4ba'
 
 
-def icon_image(percent=None, disconnected=False):
+def icon_image(percent=None, disconnected=False, estimated=False):
     from PIL import Image, ImageDraw, ImageFont
     image = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
     color = '#8f9aab' if disconnected or percent is None else ('#ffbc70' if percent <= 20 else ACCENT)
     draw.rounded_rectangle((1, 7, 62, 58), radius=12, fill='#172230', outline=color, width=3)
     try:
-        font = ImageFont.truetype('C:/Windows/Fonts/segoeuib.ttf', 32)
+        font = ImageFont.truetype('C:/Windows/Fonts/segoeuib.ttf', 23 if estimated else 32)
     except OSError:
-        font = ImageFont.load_default(size=28)
+        font = ImageFont.load_default(size=23 if estimated else 28)
     value = '–' if disconnected else ('?' if percent is None else str(percent))
+    if estimated and percent is not None and not disconnected:
+        value = '~' + value
     draw.text((32, 32), value, anchor='mm', fill=color, font=font)
     return image
 
@@ -179,7 +181,7 @@ class App:
                 self.device_icons.pop(key).stop()
         for key, reading in self.readings.items():
             if key in wanted:
-                picture = icon_image(reading.percent, not reading.connected)
+                picture = icon_image(reading.percent, not reading.connected, reading.estimated)
                 title = f'{reading.name}: {label(reading)}' + (f' · {reading.detail}' if reading.detail else '')
                 if key not in self.device_icons:
                     icon = pystray.Icon('battery-' + key, picture, title, self.tray_menu())
@@ -190,7 +192,7 @@ class App:
                     self.device_icons[key].title = title
             if self.settings.notifications and self.alerts.should_notify(reading, self.settings.threshold):
                 try:
-                    self.tray.notify(f'{reading.name}: осталось {reading.percent}%.', 'Низкий заряд' + (' · ДЕМО' if self.demo else ''))
+                    self.tray.notify(f'{reading.name}: {label(reading)}.', 'Низкий заряд' + (' · ДЕМО' if self.demo else ''))
                 except Exception:
                     pass
 
@@ -247,7 +249,7 @@ class App:
         report = {'app_version': __version__, 'os': platform.system(), 'demo': self.demo,
                   'last_update': self.last_update, 'error': self.last_error,
                   'settings': asdict(self.settings),
-                  'devices': [{'name': r.name, 'percent': r.percent, 'charging': r.charging, 'connected': r.connected, 'detail': r.detail} for r in self.readings.values()]}
+                  'devices': [{'name': r.name, 'percent': r.percent, 'charging': r.charging, 'connected': r.connected, 'detail': r.detail, 'estimated': r.estimated} for r in self.readings.values()]}
         try:
             with open(path, 'w', encoding='utf-8') as file:
                 json.dump(report, file, ensure_ascii=False, indent=2)
@@ -284,7 +286,7 @@ def main():
         try:
             readings = provider.poll()
             report = {'app_version': __version__, 'os': platform.system(), 'demo': args.demo,
-                      'devices': [{'name': r.name, 'percent': r.percent, 'connected': r.connected, 'charging': r.charging, 'detail': r.detail} for r in readings]}
+                      'devices': [{'name': r.name, 'percent': r.percent, 'connected': r.connected, 'charging': r.charging, 'detail': r.detail, 'estimated': r.estimated} for r in readings]}
             with open(args.diagnose, 'w', encoding='utf-8') as file:
                 json.dump(report, file, ensure_ascii=False, indent=2)
             print(f'Diagnostics saved: {args.diagnose}')

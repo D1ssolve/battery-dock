@@ -5,6 +5,11 @@ import unittest
 from battery_dock.core import *
 
 class ModelTests(unittest.TestCase):
+    def test_estimated_percent_is_explicit(self):
+        self.assertEqual(label(DeviceReading('a', 'A', 73, estimated=True)), '≈ 73%')
+        self.assertEqual(label(DeviceReading('a', 'A', 73, estimated=False)), '73%')
+        self.assertEqual(label(DeviceReading('a', 'A', estimated=True)), 'Нет данных')
+
     def test_invalid_percent(self):
         for value in [-1, 101, 1.5, True]:
             with self.assertRaises(ValueError):

@@ -59,12 +59,14 @@ Variant and firmware compatibility is provisional until tested on real hardware.
 | 1038 | 1876 | WoW edition cable | 92 |
 
 Use interface 3 only; never infer interface number from a Windows `colNN` value.
-The 64-byte write size matches SteelMouse’s current primary request (`req_64`),
-not a claim that every firmware descriptor has been measured. This Python backend
-does not obtain the Windows output-report length dynamically. Firmware needing a
-different length will report a failed/unknown reading until hardware diagnostics
-establish that length; it will not silently try arbitrary payloads.
-Send 64 bytes: report ID `00`, query command, zero padding. Parse only replies
+The 64-byte Python request matches SteelMouse's primary request (`req_64`).
+Windows HIDAPI pads it to the descriptor's `OutputReportByteLength` internally;
+its successful return count can therefore be larger than the Python request
+(e.g. 65 rather than 64). Accept counts >= request length, reject shorter or
+negative counts. See [HIDAPI 0.14.0 hid_write](https://github.com/libusb/hidapi/blob/hidapi-0.14.0/windows/hid.c#L929-L994).
+Send report ID `00`, query command, zero padding. Do not probe alternative
+commands, feature-report transports or unrelated interfaces after a failure.
+Parse only replies
 with the expected command echo. Supported forms: `[cmd, value]`,
 `[cmd, 00, value]`, and either with an initial report-ID `00`.
 Bit `80` means charging; remaining values 1–21 map to `(value−1)*5` percent.
@@ -82,6 +84,9 @@ rather than accidentally merging two identical physical mice without a reliable 
 
 ## Reliability and validation
 
+- Errors identify open/drain/write/read stage; native text, paths and serials
+  are not exported. Only a narrowly matched Win32 numeric code is retained.
+  An enumerated USB endpoint with unreadable battery shows unknown, not disconnected.
 - New handles each poll; close them even on failure. Disconnect/open failure and
   timeout never become a made-up 0% reading.
 - Drain at most 16 stale input reports with 1 ms timeout; read at most eight
@@ -90,7 +95,7 @@ rather than accidentally merging two identical physical mice without a reliable 
   the UI thread. No unbounded read/drain/retry loops.
 - No generic probing of unknown products, no driver replacement, and no feature
   write fallback that could address an unrelated command interface.
-- Ten automated parser/transport tests cover malformed reports, low/full/unknown
+- Automated parser/transport tests cover malformed reports, low/full/unknown
   states, estimate monotonicity/boundaries, interface selection, feature discovery,
   short/timeout/error flows and resource cleanup. They use fake HID transports.
 - Hardware tests still required: both named devices, cable/receiver transitions,

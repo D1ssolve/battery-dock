@@ -81,16 +81,53 @@ def _selected(info: dict) -> bool:
     return False
 
 
+class HidOperationError(OSError):
+    """Controlled diagnostics: never export native messages, paths or serials."""
+    def __init__(self, stage: str, error: Exception, device=None, *, written=None, requested=None):
+        self.stage = stage
+        self.error_type = type(error).__name__
+        self.written, self.requested = written, requested
+        native = str(error)
+        if device is not None and hasattr(device, 'error'):
+            try:
+                native += ' ' + str(device.error())
+            except (OSError, ValueError, RuntimeError):
+                pass
+        # HIDAPI's Windows error format includes an eight-digit Win32 code.
+        match = re.search(r'\(0x([0-9a-fA-F]{8})\)', native)
+        self.native_code = match[1].upper() if match else None
+        super().__init__(stage)
+
+    def detail(self):
+        message = f'Ошибка HID · этап {self.stage} · {self.error_type}'
+        if self.native_code:
+            message += f' · Win32 0x{self.native_code}'
+        if self.written is not None:
+            message += f' · запись {self.written}/{self.requested} байт'
+        return message + ' · USB-интерфейс найден, батарея недоступна'
+
+
+def _hid_call(device, stage, action):
+    try:
+        return action()
+    except (OSError, ValueError, RuntimeError) as error:
+        raise HidOperationError(stage, error, device) from error
+
+
 def _exchange(device, request: bytes, parser):
     # Bound both stale-input drain and answer wait even if unrelated events flood HID.
     for _ in range(16):
-        if not device.read(64, 1):
+        if not _hid_call(device, 'drain', lambda: device.read(64, 1)):
             break
-    written = device.write(request)
-    if written != len(request):
-        raise OSError('Неполная запись HID')
+    written = _hid_call(device, 'write', lambda: device.write(request))
+    # Windows HIDAPI pads to OutputReportByteLength and returns that larger
+    # byte count (e.g. 65 for a 64-byte request). Only a SHORT/failed write is
+    # an error. See hidapi-0.14.0/windows/hid.c, hid_write.
+    if written < len(request):
+        raise HidOperationError('write', OSError('short write'), device,
+                                written=written, requested=len(request))
     for _ in range(8):
-        reply = device.read(64, 100)
+        reply = _hid_call(device, 'read', lambda: device.read(64, 100))
         if reply:
             parsed = parser(bytes(reply))
             if parsed is not None:
@@ -128,7 +165,7 @@ class HardwareProvider:
             device = None
             try:
                 device = self._hid.device()
-                device.open_path(info['path'])
+                _hid_call(device, 'open', lambda: device.open_path(info['path']))
                 if is_mouse:
                     command = AEROX[pid]
                     request = bytes((0, command)) + bytes(62)
@@ -150,13 +187,14 @@ class HardwareProvider:
                         if result is not None:
                             percent, charging, mv, status = result
                             readings.append(DeviceReading(device_id, name, percent, charging,
-                                detail=f'≈ оценка по напряжению · {mv} мВ · {status}'))
+                                detail=f'≈ оценка по напряжению · {mv} мВ · {status}', estimated=True))
                 if not any(r.device_id == device_id for r in readings):
-                    readings.append(DeviceReading(device_id, name, connected=False,
-                        detail='Нет ответа батареи: устройство спит, выключено или протокол не поддержан'))
+                    readings.append(DeviceReading(device_id, name, connected=True,
+                        detail='USB-интерфейс найден, нет ответа батареи: сон, питание выключено или протокол не поддержан'))
             except (OSError, ValueError, RuntimeError) as error:
-                readings.append(DeviceReading(device_id, name, connected=False,
-                    detail=f'Ошибка доступа HID ({type(error).__name__}): переподключите устройство; проверьте доступ и конфликт ПО'))
+                diagnostic = error if isinstance(error, HidOperationError) else HidOperationError('init', error)
+                readings.append(DeviceReading(device_id, name, connected=True,
+                    detail=diagnostic.detail()))
             finally:
                 if device is not None:
                     try:
