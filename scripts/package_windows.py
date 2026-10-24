@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import sys
 import urllib.parse
@@ -65,18 +66,28 @@ def dependency_source(name: str, destination: Path) -> dict:
             'archive_type': 'pure-python-wheel' if wheel_fallback else 'sdist'}
 
 
+def package_version() -> str:
+    """Read the release version without importing application code."""
+    content = (ROOT / 'battery_dock' / '__init__.py').read_text(encoding='utf-8')
+    match = re.search(r"^__version__ = ['\"]([0-9]+\.[0-9]+\.[0-9]+)['\"]$", content, re.MULTILINE)
+    if not match:
+        raise ValueError('Expected a stable numeric MAJOR.MINOR.PATCH version.')
+    return match.group(1)
+
+
 def package() -> Path:
     if sys.platform != 'win32':
         raise RuntimeError('Package the actual Windows build on Windows, not a cross-build.')
     exe = ROOT / 'dist' / 'BatteryDock.exe'
     if not exe.is_file() or exe.read_bytes()[:2] != b'MZ':
         raise RuntimeError('Build dist/BatteryDock.exe before packaging.')
-    bundle = ROOT / 'dist' / 'BatteryDock-Windows-x64'
+    version = package_version()
+    bundle = ROOT / 'dist' / f'BatteryDock-{version}-Windows-x64'
     if bundle.exists():
         shutil.rmtree(bundle)
     bundle.mkdir()
     shutil.copy2(exe, bundle / exe.name)
-    for filename in ('README.md', 'README.en.md', 'CONTRIBUTING.md', 'LICENSE'):
+    for filename in ('README.md', 'README.en.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'SUPPORT.md', 'ROADMAP.md', 'LICENSE'):
         shutil.copy2(ROOT / filename, bundle / filename)
     shutil.copytree(ROOT / 'docs', bundle / 'docs')
     source = bundle / 'source'
@@ -85,7 +96,7 @@ def package() -> Path:
         shutil.copytree(ROOT / name, source / name, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     for name in ('run.py', 'requirements.txt', 'requirements-build.txt',
                  'build-windows.cmd', 'build-windows.ps1', 'run-windows.cmd',
-                 'README.md', 'README.en.md', 'CONTRIBUTING.md', 'LICENSE', '.gitignore'):
+                 'README.md', 'README.en.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'SUPPORT.md', 'ROADMAP.md', 'LICENSE', '.gitignore'):
         shutil.copy2(ROOT / name, source / name)
     notices = bundle / 'third-party-notices'
     notices.mkdir()
@@ -121,7 +132,7 @@ def package() -> Path:
     sources = bundle / 'third-party-source'
     sources.mkdir()
     provenance = [dependency_source(name, sources) for name in SOURCE_PACKAGES]
-    manifest = {'commit': os.environ.get('GITHUB_SHA', 'local-build'),
+    manifest = {'version': version, 'commit': os.environ.get('GITHUB_SHA', 'local-build'),
                 'python': platform.python_version(), 'platform': platform.platform(),
                 'dependencies': provenance}
     (bundle / 'BUILD-INFO.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
@@ -139,11 +150,14 @@ def package() -> Path:
     hashes = [f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.relative_to(bundle).as_posix()}'
               for p in sorted(bundle.rglob('*')) if p.is_file()]
     (bundle / 'SHA256SUMS.txt').write_text('\n'.join(hashes) + '\n', encoding='utf-8')
-    archive = bundle.with_suffix('.zip')
+    archive = bundle.parent / (bundle.name + '.zip')
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as output:
         for path in sorted(bundle.rglob('*')):
             if path.is_file():
                 output.write(path, f'{bundle.name}/{path.relative_to(bundle).as_posix()}')
+    checksum = hashlib.sha256(archive.read_bytes()).hexdigest()
+    archive.with_suffix('.zip.sha256').write_text(
+        f'{checksum}  {archive.name}\n', encoding='utf-8')
     return archive
 
 

@@ -89,5 +89,33 @@ class SettingsTests(unittest.TestCase):
                 save_settings(path, Settings(interval=0))
             self.assertEqual(load_settings(path), Settings())
 
+class FreshnessAndThresholdTests(unittest.TestCase):
+    def test_stale_label_and_alerts_never_expose_confident_percent(self):
+        reading = DeviceReading('a', 'A', 10, stale=True)
+        self.assertNotIn('10', label(reading))
+        policy = AlertPolicy()
+        self.assertFalse(policy.should_notify(reading, 20))
+        self.assertFalse(policy.warned)
+
+    def test_threshold_migration_legacy_global_is_fallback(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'settings.json'
+            path.write_text('{"threshold":37}')
+            settings = load_settings(path)
+            self.assertEqual(settings.threshold_for('new-device'), 37)
+            settings.device_thresholds[device_setting_key('private-usb-path')] = 15
+            save_settings(path, settings)
+            self.assertNotIn('private-usb-path', path.read_text())
+            loaded = load_settings(path)
+            self.assertEqual(loaded.threshold_for('private-usb-path'), 15)
+            self.assertEqual(loaded.threshold_for('other'), 37)
+
+    def test_device_threshold_validation(self):
+        for value in [0, 100, True, '20']:
+            with self.assertRaises(ValueError):
+                Settings(device_thresholds={device_setting_key('a'): value}).validate()
+        with self.assertRaises(ValueError):
+            Settings(device_thresholds={'raw-device-id': 20}).validate()
+
 if __name__ == '__main__':
     unittest.main()

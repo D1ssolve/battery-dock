@@ -1,0 +1,38 @@
+name: Device support / Новое устройство
+description: Propose support with connection details and public protocol evidence.
+title: "[Device] "
+body:
+  - type: markdown
+    attributes:
+      value: "A request is not a support commitment. Do not upload proprietary firmware, serial numbers or private USB paths."
+  - type: input
+    id: model
+    attributes:
+      label: Exact device model and revision / firmware
+    validations:
+      required: true
+  - type: dropdown
+    id: connection
+    attributes:
+      label: Connection
+      options:
+        - Original USB wireless receiver
+        - Bluetooth
+        - Wired USB
+        - Other / explain below
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Public protocol references and licensing
+      description: Links to documented read-only commands or compatible open-source implementations; say unknown if unavailable.
+    validations:
+      required: true
+  - type: textarea
+    id: testing
+    attributes:
+      label: Available hardware and testing evidence
+      description: Can you test a provider? Include non-sensitive VID/PID if known; distinguish observed facts from guesses.
+    validations:
+      required: true

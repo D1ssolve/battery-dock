@@ -1,0 +1,46 @@
+name: Bug report / Ошибка
+description: Report reproducible app behavior, not a device-support promise.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: "Read SUPPORT.md first. Do not attach secrets, serial numbers, USB paths or unreviewed diagnostics. Demo is not hardware evidence."
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit and source
+      description: Release ZIP, CI artifact or source checkout?
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Windows version and device / connection
+      description: Include firmware if known; omit serial numbers.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include plugin state, demo/normal mode and competing vendor software where relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted evidence and tests actually run
+      description: Screenshots, error category, reproduction frequency; identify checks not run.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and removed private data from this report.
+          required: true

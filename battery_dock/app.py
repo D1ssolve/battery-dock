@@ -1,5 +1,7 @@
 from __future__ import annotations
 import argparse
+import sys
+from functools import lru_cache
 import queue
 import threading
 import time
@@ -11,7 +13,7 @@ from datetime import datetime
 from dataclasses import asdict
 from . import __version__
 from .core import (Settings, settings_path, load_settings, save_settings,
-                   AlertPolicy, merge_readings, label)
+                   AlertPolicy, merge_readings, label, stale_reading, device_kind, device_setting_key)
 
 BG = '#10151f'
 PANEL = '#1b2331'
@@ -20,30 +22,52 @@ MUTED = '#9aaac0'
 ACCENT = '#81e4ba'
 
 
-def icon_image(percent=None, disconnected=False, estimated=False):
-    from PIL import Image, ImageDraw, ImageFont
+@lru_cache(maxsize=8)
+def icon_font(size):
+    from PIL import ImageFont
+    try:
+        return ImageFont.truetype('C:/Windows/Fonts/segoeuib.ttf', size)
+    except OSError:
+        return ImageFont.load_default(size=size)
+
+
+@lru_cache(maxsize=512)
+def icon_image(percent=None, disconnected=False, estimated=False, kind='device', charging=False, low=False):
+    from PIL import Image, ImageDraw
     image = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    color = '#8f9aab' if disconnected or percent is None else ('#ffbc70' if percent <= 20 else ACCENT)
-    draw.rounded_rectangle((1, 7, 62, 58), radius=12, fill='#172230', outline=color, width=3)
-    try:
-        font = ImageFont.truetype('C:/Windows/Fonts/segoeuib.ttf', 23 if estimated else 32)
-    except OSError:
-        font = ImageFont.load_default(size=23 if estimated else 28)
+    color = '#b9c6d8' if disconnected or percent is None else ('#ffbc70' if low else ACCENT)
+    draw.rounded_rectangle((1, 1, 62, 62), radius=9, fill='#10151f', outline=color, width=3)
+    # A separate silhouette remains visible above the high-contrast number.
+    if kind == 'headset':
+        draw.arc((22, 5, 41, 23), 180, 360, fill=color, width=3)
+        draw.rectangle((20, 13, 24, 22), fill=color)
+        draw.rectangle((39, 13, 43, 22), fill=color)
+    elif kind == 'mouse':
+        draw.rounded_rectangle((25, 4, 39, 23), radius=6, outline=color, width=2)
+        draw.line((32, 5, 32, 12), fill=color, width=2)
+    else:
+        draw.rectangle((24, 8, 40, 19), outline=color, width=2)
+        draw.rectangle((41, 11, 43, 16), fill=color)
+    if charging:
+        draw.polygon([(53, 5), (46, 16), (51, 16), (48, 25), (59, 12), (53, 12)], fill='#ffffff')
     value = '–' if disconnected else ('?' if percent is None else str(percent))
     if estimated and percent is not None and not disconnected:
-        value = '~' + value
-    draw.text((32, 32), value, anchor='mm', fill=color, font=font)
+        # Approximation badge above the digits; never shrink the percentage.
+        draw.line([(6, 13), (9, 10), (13, 14), (17, 11)], fill=color, width=3)
+    draw.text((32, 43), value, anchor='mm', fill=color, font=icon_font(32))
     return image
 
 
 class App:
-    def __init__(self, provider, demo=False):
+    def __init__(self, provider, demo=False, instance=None):
+        self.instance = instance
         self.provider, self.demo = provider, demo
         self.settings = load_settings(settings_path())
         self.settings.per_device_icons = True  # Migrate legacy single-icon preferences.
         self.readings = {}
         self.reading_times = {}
+        self.last_success = {}
         self._start_hidden_pending = self.settings.start_hidden
         self.alerts = AlertPolicy()
         self.events = queue.Queue()
@@ -81,8 +105,10 @@ class App:
         tk.Label(self.root, textvariable=self.status, font=('Segoe UI', 9), wraplength=720, justify='left', bg=BG, fg=MUTED).pack(fill='x', padx=28)
         actions = tk.Frame(self.root, bg=BG)
         actions.pack(fill='x', padx=28, pady=20)
-        for text, callback in [('Обновить', self.wakeup.set), ('Настройки', self.preferences), ('Калибровка', self.calibration), ('Плагины', self.plugins), ('Диагностика', self.diagnostics), ('Выход', self.quit)]:
-            ttk.Button(actions, text=text, command=callback).pack(side='left', padx=(0, 8))
+        for index, (text, callback) in enumerate([('Обновить', self.wakeup.set), ('Настройки', self.preferences), ('Калибровка', self.calibration), ('Плагины', self.plugins), ('Диагностика', self.diagnostics), ('Обновления', self.check_updates), ('Выход', self.quit)]):
+            ttk.Button(actions, text=text, command=callback).grid(row=index // 4, column=index % 4, sticky='ew', padx=(0, 8), pady=3)
+        for column in range(4):
+            actions.columnconfigure(column, weight=1)
         self.render()
 
     def tray_menu(self):
@@ -95,6 +121,7 @@ class App:
             pystray.MenuItem('Калибровка G733', action('calibration')),
             pystray.MenuItem('Плагины', action('plugins')),
             pystray.MenuItem('Обновить', action('refresh')),
+            pystray.MenuItem('Проверить обновления', action('check_updates')),
             pystray.MenuItem('Выход', action('quit')))
 
     def poll_loop(self):
@@ -103,9 +130,10 @@ class App:
                 try:
                     observed_at = time.monotonic()  # Conservative: plugins may delay the batch.
                     readings = self.provider.poll()
+                    errors = getattr(self.provider, 'errors', {})
+                    if isinstance(errors, dict):
+                        self.events.put(('provider_errors', dict(errors)))
                     self.events.put(('reading_batch', (readings, observed_at)))
-                    if hasattr(self.provider, 'errors'):
-                        self.events.put(('provider_errors', dict(self.provider.errors)))
                 except Exception as exc:
                     # No raw HID paths, serials, or exception payloads in diagnostics.
                     self.events.put(('error', type(exc).__name__))
@@ -152,25 +180,50 @@ class App:
                             icon.stop()
                         except Exception:
                             pass
-                elif kind in ('preferences', 'calibration', 'plugins'):
+                elif kind in ('preferences', 'calibration', 'plugins', 'check_updates'):
                     self.show()
                     getattr(self, kind)()
+                elif kind == 'update_result':
+                    self._checking_updates = False
+                    release, error = value
+                    if error:
+                        messagebox.showerror('Обновления', error, parent=self.root)
+                    elif release.update_available:
+                        if messagebox.askyesno('Обновления', f'Доступна версия {release.version}. Открыть страницу GitHub Releases?\nНичего не устанавливается автоматически.', parent=self.root):
+                            import webbrowser
+                            webbrowser.open(release.url)
+                    else:
+                        messagebox.showinfo('Обновления', 'Новая стабильная версия не найдена.', parent=self.root)
                 elif kind == 'refresh':
                     self.wakeup.set()
                 elif kind == 'readings':
                     self.reading_times = {r.device_id: received_at for r in value}
-                    self.readings = merge_readings(self.readings, value)
+                    if not hasattr(self, 'last_success'):
+                        self.last_success = {}
+                    self.last_success.update({r.device_id: received_at for r in value if r.connected and not r.stale and (r.percent is not None or r.voltage_mv is not None)})
+                    if time.monotonic() - received_at > max(15, 2 * self.settings.interval):
+                        value = [stale_reading(r) if r.connected else r for r in value]
+                    previous = self.readings
+                    self.readings = merge_readings(previous, value)
+                    current_ids = {r.device_id for r in value}
+                    for key, reading in previous.items():
+                        failed = any((key.startswith(f'plugin:{provider}:') if provider != 'builtin' else not key.startswith('plugin:'))
+                                     for provider in getattr(self, 'provider_errors', {}))
+                        if failed and key not in current_ids:
+                            self.readings[key] = stale_reading(reading)
                     self.prune_disabled_plugins()
                     self.last_update = datetime.now().isoformat(timespec='seconds')
-                    self.last_error = ''
+                    errors = getattr(self, 'provider_errors', {})
+                    self.last_error = ('Провайдеры: ' + '; '.join(f'{key}: {error}' for key, error in errors.items())) if errors else ''
                     self.render()
                     self.update_tray()
                 elif kind == 'provider_errors':
+                    self.provider_errors = value
                     self.last_error = ('Провайдеры: ' + '; '.join(f'{key}: {error}' for key, error in value.items())) if value else ''
                     self.render()
                 elif kind == 'error':
                     self.last_error = f'Не удалось прочитать HID: {value}. Повторим автоматически.'
-                    self.readings = merge_readings(self.readings, [])
+                    self.readings = {key: stale_reading(r) for key, r in self.readings.items()}
                     self.render()
                     self.update_tray()
         except queue.Empty:
@@ -180,24 +233,83 @@ class App:
             self.status.set(self.last_error)
         finally:
             if not self.stopping.is_set():
-                self.root.after(150, self.process_events)
+                try:
+                    self.watchdog()
+                    instance = getattr(self, 'instance', None)
+                    if instance and instance.poll_activation():
+                        self._start_hidden_pending = False
+                        self.show()
+                finally:
+                    self.root.after(150, self.process_events)
+
+    def watchdog(self):
+        """Runs on Tk independently of a blocked hardware/provider poll."""
+        now = time.monotonic()
+        changed = False
+        wall = time.time()
+        previous_tick = getattr(self, '_watchdog_wall', wall)
+        self._watchdog_wall = wall
+        # Tk callbacks pause through suspend. A delayed UI tick forces a fresh poll,
+        # including on Windows where monotonic-clock suspend behavior can vary.
+        resumed = wall - previous_tick > 5
+        if resumed:
+            self.wakeup.set()
+        for key, reading in list(self.readings.items()):
+            observed = self.reading_times.get(key)
+            if reading.connected and not reading.stale and (resumed or (observed is not None and now - observed > max(15, 2 * self.settings.interval))):
+                self.readings[key] = stale_reading(reading)
+                changed = True
+        if changed:
+            self.update_tray()
+        if changed or now - getattr(self, '_last_age_render', now) >= 1:
+            self.render()
+        self._last_age_render = getattr(self, '_last_age_render', now)
+        if now - self._last_age_render >= 1:
+            self._last_age_render = now
+
+    def age_text(self, key):
+        observed = getattr(self, 'last_success', {}).get(key)
+        if observed is None:
+            return 'Нет успешного показания'
+        return f'Последнее успешное: {max(0, int(time.monotonic() - observed))} с назад'
 
     def render(self):
-        for child in self.cards.winfo_children():
-            child.destroy()
-        if not self.readings:
-            tk.Label(self.cards, text='Устройства пока не найдены', font=('Segoe UI', 16, 'bold'), bg=BG, fg=TEXT).pack(anchor='w', pady=(28, 10))
-            tk.Label(self.cards, text='Подключите USB-приёмник G733 или Aerox 9.\nВключите устройство. Bluetooth пока не поддерживается.\nЗаряд появится только после корректного ответа устройства.', justify='left', font=('Segoe UI', 11), bg=BG, fg=MUTED).pack(anchor='w')
-        for reading in self.readings.values():
-            card = tk.Frame(self.cards, bg=PANEL, padx=18, pady=13)
-            card.pack(fill='x', pady=(0, 10))
-            top = tk.Frame(card, bg=PANEL)
-            top.pack(fill='x')
-            tk.Label(top, text=reading.name, font=('Segoe UI', 12, 'bold'), bg=PANEL, fg=TEXT).pack(side='left')
-            tk.Label(top, text=label(reading), font=('Segoe UI', 15, 'bold'), bg=PANEL, fg=ACCENT if reading.connected else MUTED).pack(side='right')
-            ttk.Progressbar(card, maximum=100, value=reading.percent if reading.connected and reading.percent is not None else 0).pack(fill='x', pady=(10, 5))
-            tk.Label(card, text=reading.detail or ('USB-приёмник' if reading.connected else 'Нет подключения'), font=('Segoe UI', 9), bg=PANEL, fg=MUTED, anchor='w').pack(fill='x')
-        self.status.set(self.last_error or self.tray_error or (f'Обновлено: {self.last_update} · опрос каждые {self.settings.interval} с' if self.last_update else 'Ожидаем первый ответ…'))
+        if not hasattr(self, '_card_widgets'):
+            self._card_widgets = {}
+        wanted = set(self.readings) or {'__empty__'}
+        for key in list(self._card_widgets):
+            if key not in wanted:
+                self._card_widgets.pop(key)[0].destroy()
+        if not self.readings and '__empty__' not in self._card_widgets:
+            empty = tk.Label(self.cards, text='Устройства пока не найдены\nПодключите USB-приёмник и включите устройство.', justify='left', font=('Segoe UI', 14), bg=BG, fg=TEXT)
+            empty.pack(anchor='w', pady=28)
+            self._card_widgets['__empty__'] = (empty,)
+        for key, reading in self.readings.items():
+            if key not in self._card_widgets:
+                card = tk.Frame(self.cards, bg=PANEL, padx=18, pady=13)
+                card.pack(fill='x', pady=(0, 10))
+                top = tk.Frame(card, bg=PANEL)
+                top.pack(fill='x')
+                name = tk.Label(top, font=('Segoe UI', 12, 'bold'), bg=PANEL, fg=TEXT)
+                name.pack(side='left')
+                state = tk.Label(top, font=('Segoe UI', 15, 'bold'), bg=PANEL)
+                state.pack(side='right')
+                bar = ttk.Progressbar(card, maximum=100)
+                bar.pack(fill='x', pady=(10, 5))
+                detail = tk.Label(card, font=('Segoe UI', 9), bg=PANEL, fg=MUTED, anchor='w')
+                detail.pack(fill='x')
+                self._card_widgets[key] = (card, name, state, bar, detail)
+            _, name, state, bar, detail = self._card_widgets[key]
+            values = [dict(text=reading.name), dict(text=label(reading), fg=ACCENT if reading.connected and not reading.stale else MUTED),
+                      dict(value=reading.percent if reading.connected and not reading.stale and reading.percent is not None else 0),
+                      dict(text=(reading.detail or ('USB-приёмник' if reading.connected else 'Нет подключения')) + ' · ' + self.age_text(key))]
+            for widget, options in zip((name, state, bar, detail), values):
+                if getattr(widget, '_battery_options', None) != options:
+                    widget.configure(**options)
+                    widget._battery_options = options
+        status = self.last_error or self.tray_error or (f'Обновлено: {self.last_update} · опрос каждые {self.settings.interval} с' if self.last_update else 'Ожидаем первый ответ…')
+        if self.status.get() != status:
+            self.status.set(status)
 
     def update_tray(self):
         try:
@@ -218,7 +330,8 @@ class App:
         for key, reading in self.readings.items():
             try:
                 import pystray
-                picture = icon_image(reading.percent, not reading.connected, reading.estimated)
+                threshold = self.settings.threshold_for(key)
+                picture = icon_image(None if reading.stale else reading.percent, not reading.connected, reading.estimated, device_kind(reading), reading.charging is True, reading.percent is not None and reading.percent <= threshold)
                 title = f'{reading.name}: {label(reading)}' + (f' · {reading.detail}' if reading.detail else '')
                 if key in self.pending_icons:
                     continue
@@ -248,9 +361,14 @@ class App:
                         raise
                     continue  # Visibility is confirmed asynchronously on the UI thread.
                 else:
-                    self.device_icons[key].icon = picture
-                    self.device_icons[key].title = title
-                if self.settings.notifications and self.alerts.should_notify(reading, self.settings.threshold):
+                    icon = self.device_icons[key]
+                    if getattr(icon, '_battery_picture', None) is not picture:
+                        icon.icon = picture
+                        icon._battery_picture = picture
+                    if getattr(icon, '_battery_title', None) != title:
+                        icon.title = title
+                        icon._battery_title = title
+                if self.settings.notifications and self.alerts.should_notify(reading, threshold):
                     try:
                         self.device_icons[key].notify(f'{reading.name}: {label(reading)}.', 'Низкий заряд' + (' · ДЕМО' if self.demo else ''))
                     except Exception:
@@ -302,12 +420,33 @@ class App:
         for row, (name, value) in enumerate([('Опрос, секунд (5–3600)', interval), ('Низкий заряд, % (1–99)', threshold)]):
             ttk.Label(frame, text=name).grid(row=row, column=0, sticky='w', pady=8)
             ttk.Entry(frame, textvariable=value, width=10).grid(row=row, column=1, padx=16)
-        for row, (name, value) in enumerate([('Уведомлять о низком заряде', notifications), ('Скрывать окно при следующем запуске', hidden)], 2):
+        device_vars = {}
+        row = 2
+        for key, reading in self.readings.items():
+            variable = tk.StringVar(value=str(self.settings.device_thresholds.get(device_setting_key(key), '')))
+            device_vars[key] = variable
+            ttk.Label(frame, text=reading.name + ' · % (пусто = общий)').grid(row=row, column=0, sticky='w', pady=5)
+            ttk.Entry(frame, textvariable=variable, width=10).grid(row=row, column=1, padx=16)
+            row += 1
+        from . import autostart
+        try:
+            startup_initial = autostart.is_enabled()
+        except OSError:
+            startup_initial = False
+        startup = tk.BooleanVar(value=startup_initial)
+        for row, (name, value) in enumerate([('Уведомлять о низком заряде', notifications), ('Скрывать окно при следующем запуске', hidden), ('Запускать при входе в Windows (текущий пользователь)', startup)], row):
             ttk.Checkbutton(frame, text=name, variable=value).grid(row=row, column=0, columnspan=2, sticky='w', pady=5)
         def save():
             try:
-                settings = Settings(int(interval.get()), int(threshold.get()), notifications.get(), True, hidden.get()).validate()
-                save_settings(settings_path(), settings)
+                thresholds = dict(self.settings.device_thresholds)
+                for key, variable in device_vars.items():
+                    opaque = device_setting_key(key)
+                    if variable.get().strip():
+                        thresholds[opaque] = int(variable.get())
+                    else:
+                        thresholds.pop(opaque, None)
+                settings = Settings(int(interval.get()), int(threshold.get()), notifications.get(), True, hidden.get(), thresholds).validate()
+                self.persist_preferences(settings, startup.get())
             except (ValueError, OSError) as exc:
                 messagebox.showerror('Не удалось сохранить', str(exc), parent=window)
                 return
@@ -316,8 +455,25 @@ class App:
             self.render()
             self.wakeup.set()
             window.destroy()
-        ttk.Button(frame, text='Сохранить', command=save).grid(row=5, column=0, pady=(18, 0))
-        ttk.Button(frame, text='Отмена', command=window.destroy).grid(row=5, column=1, pady=(18, 0))
+        ttk.Button(frame, text='Сохранить', command=save).grid(row=row + 1, column=0, pady=(18, 0))
+        ttk.Button(frame, text='Отмена', command=window.destroy).grid(row=row + 1, column=1, pady=(18, 0))
+
+    def persist_preferences(self, settings, startup):
+        """Compensate an explicit startup write if settings persistence fails."""
+        from . import autostart
+        previous = autostart.is_enabled()
+        changed = startup != previous
+        if changed:
+            autostart.set_enabled(startup)
+        try:
+            save_settings(settings_path(), settings)
+        except (OSError, ValueError):
+            if changed:
+                try:
+                    autostart.set_enabled(previous)
+                except OSError:
+                    raise OSError('Настройки не сохранены; автозапуск изменён и не восстановлен. Проверьте автозапуск Windows.') from None
+            raise
 
     def calibration_devices(self):
         # Plugin IDs are namespaced by the registry; never accept their metadata.
@@ -330,7 +486,7 @@ class App:
         from .calibration import CalibrationError
         reading = self.calibration_devices().get(device_id)
         observed = self.reading_times.get(device_id)
-        if (reading is None or not reading.connected or reading.charging is not False
+        if (reading is None or reading.stale or not reading.connected or reading.charging is not False
                 or reading.discharging is not True or reading.voltage_mv is None or not reading.calibration_key):
             raise CalibrationError('Нужен подключённый G733 с корректным напряжением в режиме разряда.')
         if observed is None or not 0 <= time.monotonic() - observed <= min(60, 2 * self.settings.interval):
@@ -523,14 +679,23 @@ class App:
             spec = selected()
             if not spec or spec.enabled:
                 return
-            warning = (f'Включить {spec.name} ({spec.id})?\n\n'
+            from .plugins import inspect_manifest
+            try:
+                reviewed, _, _ = inspect_manifest(spec.manifest)
+            except (OSError, ValueError, TypeError) as exc:
+                messagebox.showerror('Плагин не изменён', str(exc), parent=window)
+                return
+            if reviewed.id != spec.id:
+                messagebox.showerror('Плагин не изменён', 'Идентификатор manifest изменился. Добавьте плагин заново.', parent=window)
+                return
+            warning = (f'Включить {reviewed.name} ({reviewed.id})?\n\n'
                        'Это произвольный Python-код с полными правами вашей учётной записи. '
                        'Песочницы нет: код может читать/изменять файлы, обращаться к сети и устройствам. '
-                       'Ошибка или зависание плагина может нарушить работу приложения.\n\n'
+                       'Плагин выполняется в отдельном процессе с тайм-аутом, но это не ограничение его прав.\n\n'
                        'Проверьте исходный код и его зависимости. Не включайте неизвестные плагины. '
                        'Разрешение сохраняется для следующих запусков.\n\n' + spec.manifest)
             if messagebox.askyesno('Доверять и включить?', warning, parent=window, default='no'):
-                perform(lambda: self.provider.enable(spec.id, True))
+                perform(lambda: self.provider.enable(spec.id, True, expected_digest=reviewed.digest))
         def disable():
             spec = selected()
             if spec:
@@ -545,6 +710,21 @@ class App:
             ttk.Button(buttons, text=title, command=action).pack(side='left', padx=(0, 5))
         refresh()
 
+    def check_updates(self):
+        if getattr(self, '_checking_updates', False):
+            return
+        self._checking_updates = True
+        self.status.set('Проверяем GitHub Releases…')
+        def check():
+            from .updates import check_latest_release
+            try:
+                result = (check_latest_release(__version__), None)
+            except Exception:
+                result = (None, 'Не удалось проверить GitHub Releases. Повторите позже.')
+            if not self.stopping.is_set():
+                self.events.put(('update_result', result))
+        threading.Thread(target=check, name='Manual release check', daemon=True).start()
+
     def diagnostics(self):
         path = filedialog.asksaveasfilename(parent=self.root, title='Сохранить диагностику', defaultextension='.json', initialfile='battery-dock-diagnostics.json', filetypes=[('JSON', '*.json')])
         if not path:
@@ -552,8 +732,8 @@ class App:
         # Intentional allowlist: never serialize device_id (could contain a USB path).
         report = {'app_version': __version__, 'os': platform.system(), 'demo': self.demo,
                   'last_update': self.last_update, 'error': self.last_error,
-                  'settings': asdict(self.settings),
-                  'devices': [{'name': r.name, 'percent': r.percent, 'charging': r.charging, 'connected': r.connected, 'detail': r.detail, 'estimated': r.estimated} for r in self.readings.values()]}
+                  'settings': {k: v for k, v in asdict(self.settings).items() if k != 'device_thresholds'},
+                  'devices': [{'name': r.name, 'percent': r.percent, 'charging': r.charging, 'connected': r.connected, 'detail': r.detail, 'estimated': r.estimated, 'stale': r.stale} for r in self.readings.values()]}
         try:
             with open(path, 'w', encoding='utf-8') as file:
                 json.dump(report, file, ensure_ascii=False, indent=2)
@@ -561,8 +741,13 @@ class App:
             messagebox.showerror('Ошибка', 'Не удалось сохранить файл.', parent=self.root)
 
     def quit(self):
+        if self.stopping.is_set():
+            return
         self.stopping.set()
         self.wakeup.set()
+        force_stop = getattr(getattr(self, 'provider', None), 'force_stop', None)
+        if force_stop:
+            force_stop()
         for icon in [*self.device_icons.values(), *self.pending_icons.values()]:
             if icon:
                 try:
@@ -572,14 +757,35 @@ class App:
         self.root.destroy()
 
     def run(self):
-        self.root.mainloop()
+        try:
+            self.root.mainloop()
+        finally:
+            if not self.stopping.is_set():
+                self.quit()
+            self.worker.join(timeout=2)
 
 
 def main():
+    # Frozen plugin subprocesses must bypass UI, instance locking and hardware.
+    if len(sys.argv) == 4 and sys.argv[1] == '--plugin-worker':
+        from .plugin_worker import main as worker_main
+        worker_main(int(sys.argv[2]), sys.argv[3])
+        return
     parser = argparse.ArgumentParser(description='Battery Dock — Windows wireless battery monitor')
     parser.add_argument('--demo', action='store_true', help='Use explicitly simulated readings; no hardware access')
     parser.add_argument('--diagnose', metavar='FILE', help='Poll once and save safe JSON without opening the UI')
     args = parser.parse_args()
+    from .single_instance import SingleInstance
+    instance = SingleInstance(enabled=not args.diagnose and not args.demo)
+    if not instance.acquire():
+        return
+    try:
+        _run(args, instance)
+    finally:
+        instance.close()
+
+
+def _run(args, instance):
     if args.demo:
         from .demo import DemoProvider
         provider = DemoProvider()
@@ -601,4 +807,4 @@ def main():
             if close:
                 close()
         return
-    App(provider, args.demo).run()
+    App(provider, args.demo, instance).run()

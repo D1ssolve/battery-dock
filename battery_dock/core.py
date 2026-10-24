@@ -1,6 +1,7 @@
 """Dependency-free domain model and persistent preferences."""
 from __future__ import annotations
-from dataclasses import dataclass, asdict, replace
+from dataclasses import dataclass, asdict, replace, field
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,7 @@ class DeviceReading:
     voltage_mv: int | None = None
     calibration_key: str | None = None
     discharging: bool | None = None
+    stale: bool = False
 
     def __post_init__(self):
         if self.percent is not None and (type(self.percent) is not int or not 0 <= self.percent <= 100):
@@ -35,6 +37,11 @@ class Settings:
     per_device_icons: bool = True
     start_hidden: bool = False
 
+    device_thresholds: dict[str, int] = field(default_factory=dict)
+
+    def threshold_for(self, device_id):
+        return self.device_thresholds.get(device_setting_key(device_id), self.threshold)
+
     def validate(self):
         if type(self.interval) is not int or not 5 <= self.interval <= 3600:
             raise ValueError('Интервал: от 5 до 3600 секунд')
@@ -43,7 +50,16 @@ class Settings:
         for name in ('notifications', 'per_device_icons', 'start_hidden'):
             if type(getattr(self, name)) is not bool:
                 raise ValueError('Invalid boolean preference')
+        if not isinstance(self.device_thresholds, dict) or any(
+                not isinstance(k, str) or len(k) != 64 or any(c not in "0123456789abcdef" for c in k)
+                or type(v) is not int or not 1 <= v <= 99 for k, v in self.device_thresholds.items()):
+            raise ValueError("Invalid device thresholds")
         return self
+
+
+def device_setting_key(device_id: str) -> str:
+    """Persist opaque keys, never USB paths/serials."""
+    return hashlib.sha256(device_id.encode("utf-8")).hexdigest()
 
 
 def settings_path() -> Path:
@@ -82,7 +98,7 @@ class AlertPolicy:
         self.warned: set[str] = set()
 
     def should_notify(self, reading: DeviceReading, threshold: int) -> bool:
-        if not reading.connected or reading.percent is None:
+        if reading.stale or not reading.connected or reading.percent is None:
             return False
         if reading.percent >= min(100, threshold + 5):
             self.warned.discard(reading.device_id)
@@ -96,7 +112,7 @@ class AlertPolicy:
 
 def merge_readings(previous: dict[str, DeviceReading], current: list[DeviceReading]):
     result = {key: replace(value, connected=False, percent=None, charging=None, voltage_mv=None, calibration_key=None, discharging=None,
-                           detail='Устройство не обнаружено') for key, value in previous.items()}
+                           stale=False, detail='Устройство не обнаружено') for key, value in previous.items()}
     result.update({value.device_id: value for value in current})
     return result
 
@@ -104,6 +120,22 @@ def merge_readings(previous: dict[str, DeviceReading], current: list[DeviceReadi
 def label(reading: DeviceReading) -> str:
     if not reading.connected:
         return 'Отключено'
+    if reading.stale:
+        return 'Устарело · нет свежих данных'
     if reading.percent is None:
         return 'Нет данных'
     return ('≈ ' if reading.estimated else '') + f'{reading.percent}%' + (' · зарядка' if reading.charging else '')
+
+
+def stale_reading(reading: DeviceReading) -> DeviceReading:
+    return replace(reading, stale=True, percent=None, charging=None, voltage_mv=None,
+                   calibration_key=None, discharging=None)
+
+
+def device_kind(reading: DeviceReading) -> str:
+    name = reading.name.lower()
+    if any(word in name for word in ('g733', 'headset', 'наушник')):
+        return 'headset'
+    if any(word in name for word in ('aerox', 'mouse', 'мыш')):
+        return 'mouse'
+    return 'device'

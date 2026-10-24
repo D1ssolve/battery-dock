@@ -53,7 +53,8 @@ class AppFlowTests(unittest.TestCase):
         app.events.put(('error', 'OSError'))
         app.process_events()
         self.assertIsNone(app.readings['mouse'].percent)
-        self.assertFalse(app.readings['mouse'].connected)
+        self.assertTrue(app.readings['mouse'].connected)
+        self.assertTrue(app.readings['mouse'].stale)
 
     def test_close_without_tray_does_not_orphan_process(self):
         app = self.make_app()
@@ -135,7 +136,7 @@ class AppFlowTests(unittest.TestCase):
         for action in actions:
             action()
         self.assertEqual([app.events.get_nowait()[0] for _ in actions],
-                         ['show', 'preferences', 'calibration', 'plugins', 'refresh', 'quit'])
+                         ['show', 'preferences', 'calibration', 'plugins', 'refresh', 'check_updates', 'quit'])
         self.assertFalse(app.wakeup.is_set())
 
     def calibration_app(self):
@@ -266,6 +267,173 @@ class AppFlowTests(unittest.TestCase):
         app.events.put(('show', None))
         app.process_events()
         self.assertFalse(app._start_hidden_pending)
+
+    def test_stale_watchdog_runs_without_poll_completion(self):
+        app = self.make_app()
+        app.readings = {'a': DeviceReading('a', 'Mouse', 55, voltage_mv=3800)}
+        app.reading_times = {'a': 1}
+        with patch('battery_dock.app.time.monotonic', return_value=100):
+            app.process_events()
+        self.assertTrue(app.readings['a'].stale)
+        self.assertTrue(app.readings['a'].connected)
+        self.assertIsNone(app.readings['a'].percent)
+        self.assertIsNone(app.readings['a'].voltage_mv)
+        app.update_tray.assert_called_once()
+        app.root.after.assert_called_once()
+
+    def test_new_success_clears_stale_but_unknown_does_not_claim_success(self):
+        app = self.make_app()
+        app.events.put(('reading_batch', ([DeviceReading('a', 'A', 33)], 100)))
+        with patch('battery_dock.app.time.monotonic', return_value=100):
+            app.process_events()
+        self.assertEqual(app.last_success['a'], 100)
+        app.events.put(('reading_batch', ([DeviceReading('a', 'A', None)], 110)))
+        with patch('battery_dock.app.time.monotonic', return_value=110):
+            app.process_events()
+        self.assertEqual(app.last_success['a'], 100)
+        self.assertFalse(app.readings['a'].stale)
+        self.assertTrue(app.readings['a'].connected)
+
+    def test_resume_tick_invalidates_and_requests_immediate_poll(self):
+        app = self.make_app()
+        app.readings = {'a': DeviceReading('a', 'A', 40)}
+        app.reading_times = {'a': time.monotonic()}
+        app._watchdog_wall = 10
+        with patch('battery_dock.app.time.time', return_value=50):
+            app.watchdog()
+        self.assertTrue(app.wakeup.is_set())
+        self.assertTrue(app.readings['a'].stale)
+
+    def test_quit_idempotent_stops_pending_and_ready_icons(self):
+        app = self.make_app()
+        app.device_icons = {'a': Mock()}
+        app.pending_icons = {'b': Mock()}
+        app.quit()
+        app.quit()
+        app.root.destroy.assert_called_once()
+        for icon in [*app.device_icons.values(), *app.pending_icons.values()]:
+            icon.stop.assert_called_once()
+
+    def test_second_instance_activation_uses_tk_event_pump(self):
+        app = self.make_app()
+        app.instance = Mock()
+        app.instance.poll_activation.return_value = True
+        app._start_hidden_pending = True
+        app.process_events()
+        app.root.deiconify.assert_called_once()
+        self.assertFalse(app._start_hidden_pending)
+
+    def test_icon_cache_and_font_cache(self):
+        from battery_dock.app import icon_image, icon_font
+        icon_image.cache_clear()
+        icon_font.cache_clear()
+        first = icon_image(55, kind='mouse')
+        for _ in range(100):
+            self.assertIs(first, icon_image(55, kind='mouse'))
+        self.assertEqual(icon_image.cache_info().misses, 1)
+        self.assertEqual(icon_image.cache_info().hits, 100)
+        self.assertIsNot(first, icon_image(55, kind='headset'))
+        self.assertEqual(icon_font.cache_info().misses, 1)
+        self.assertNotEqual(first.tobytes(), icon_image(55, kind='mouse', charging=True).tobytes())
+
+    def test_unchanged_cards_are_not_recreated_or_reconfigured(self):
+        app = self.make_app()
+        app.cards = Mock()
+        app.last_error = app.tray_error = ''
+        app.last_update = None
+        app.readings = {'a': DeviceReading('a', 'A', 40)}
+        with patch('battery_dock.app.tk.Frame') as frames, patch('battery_dock.app.tk.Label') as labels, patch('battery_dock.app.ttk.Progressbar') as bars:
+            # Separate widgets, not one mock shared by every constructor call.
+            frames.side_effect = lambda *a, **k: Mock()
+            labels.side_effect = lambda *a, **k: Mock(_battery_options=None)
+            bars.side_effect = lambda *a, **k: Mock(_battery_options=None)
+            App.render(app)
+            widgets = app._card_widgets['a']
+            counts = [w.configure.call_count for w in widgets[1:]]
+            App.render(app)
+            self.assertEqual(frames.call_count, 2)
+            self.assertEqual(labels.call_count, 3)
+            self.assertEqual(bars.call_count, 1)
+            self.assertEqual([w.configure.call_count for w in widgets[1:]], counts)
+
+    def test_unchanged_tray_does_not_assign_again(self):
+        app = self.make_app()
+        app.readings = {'a': DeviceReading('a', 'A', 55)}
+        class Icon:
+            def __init__(self):
+                self.assignments = []
+            def __setattr__(self, key, value):
+                if key in ('icon', 'title'):
+                    self.assignments.append(key)
+                object.__setattr__(self, key, value)
+        icon = Icon()
+        app.device_icons = {'a': icon}
+        with patch.dict(sys.modules, {'pystray': Mock()}):
+            app._update_tray()
+            app._update_tray()
+        self.assertEqual(icon.assignments, ['icon', 'title'])
+
+    def test_delayed_low_batch_stale_before_tray_notification(self):
+        app = self.make_app()
+        app.events.put(('reading_batch', ([DeviceReading('a', 'A', 10)], 1)))
+        seen = []
+        app.update_tray.side_effect = lambda: seen.append(app.readings['a'])
+        with patch('battery_dock.app.time.monotonic', return_value=100):
+            app.process_events()
+        self.assertTrue(seen)
+        self.assertTrue(all(r.stale and r.percent is None for r in seen))
+
+    def test_failed_settings_save_rolls_back_autostart(self):
+        app = self.make_app()
+        with patch('battery_dock.autostart.is_enabled', return_value=False), patch('battery_dock.autostart.set_enabled') as startup, patch('battery_dock.app.save_settings', side_effect=OSError('disk full')):
+            with self.assertRaises(OSError):
+                app.persist_preferences(Settings(), True)
+        self.assertEqual([c.args for c in startup.call_args_list], [(True,), (False,)])
+
+    def test_failed_autostart_rollback_reports_partial_change(self):
+        app = self.make_app()
+        with patch('battery_dock.autostart.is_enabled', return_value=False), patch('battery_dock.autostart.set_enabled', side_effect=[None, OSError()]), patch('battery_dock.app.save_settings', side_effect=OSError()):
+            with self.assertRaisesRegex(OSError, 'автозапуск изменён'):
+                app.persist_preferences(Settings(), True)
+
+    def test_unchanged_startup_preference_never_writes_registry(self):
+        app = self.make_app()
+        with patch('battery_dock.autostart.is_enabled', return_value=False), patch('battery_dock.autostart.set_enabled') as startup, patch('battery_dock.app.save_settings'):
+            app.persist_preferences(Settings(), False)
+        startup.assert_not_called()
+
+    def test_provider_failure_is_unknown_not_false_disconnect(self):
+        app = self.make_app()
+        app.readings = {'plugin:example:a': DeviceReading('plugin:example:a', 'A', 55)}
+        app.events.put(('provider_errors', {'example': 'TimeoutError'}))
+        app.events.put(('readings', []))
+        app.process_events()
+        reading = app.readings['plugin:example:a']
+        self.assertIn('TimeoutError', app.last_error)
+        self.assertTrue(reading.stale)
+        self.assertTrue(reading.connected)
+        app.events.put(('provider_errors', {}))
+        app.events.put(('readings', []))
+        app.process_events()
+        self.assertFalse(app.readings['plugin:example:a'].connected)
+        self.assertFalse(app.readings['plugin:example:a'].stale)
+
+    def test_quit_forces_plugin_workers_to_stop(self):
+        app = self.make_app()
+        app.provider = Mock()
+        app.quit()
+        app.provider.force_stop.assert_called_once()
+
+    def test_large_icon_digits_fit_and_estimated_badge_differs(self):
+        from battery_dock.app import icon_image, icon_font
+        from PIL import ImageDraw
+        image = icon_image(100)
+        bounds = ImageDraw.Draw(image).textbbox((32, 43), '100', anchor='mm', font=icon_font(32))
+        self.assertGreaterEqual(bounds[0], 3)
+        self.assertLessEqual(bounds[2], 61)
+        self.assertGreaterEqual(bounds[1], 24)
+        self.assertLessEqual(bounds[3], 61)
+        self.assertNotEqual(icon_image(73).tobytes(), icon_image(73, estimated=True).tobytes())
 
 
 if __name__ == '__main__':

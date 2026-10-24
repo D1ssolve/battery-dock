@@ -22,12 +22,21 @@ def child():
             app.calibration()
             app.calibration_window.update_idletasks()
             app.calibration_window.destroy()
+            # Unchanged render keeps the existing widgets alive.
+            cards = dict(app._card_widgets)
+            app.render()
+            assert all(app._card_widgets[k][0] is row[0] for k, row in cards.items())
+            app._watchdog_wall = 1
+            app.watchdog()
+            assert app.wakeup.is_set()
+            assert all(r.stale for r in app.readings.values() if r.connected)
             app.hide()
             app.show()
             assert app.root.state() != 'withdrawn'
         except Exception as error:
             errors.append(str(error))
         finally:
+            app.quit()
             app.quit()
 
     app.root.after(2500, exercise)

@@ -10,7 +10,10 @@ import re
 import sys
 import tempfile
 import threading
-import types
+import secrets
+import socket
+import subprocess
+import time
 
 from .core import DeviceReading, settings_path
 
@@ -117,6 +120,7 @@ def validate_readings(values, plugin_id):
             or type(value.connected) is not bool or type(value.estimated) is not bool
             or (value.charging is not None and type(value.charging) is not bool)
             or value.calibration_key is not None
+            or getattr(value, 'stale', False) is not False
             or value.discharging is not None
             or (value.voltage_mv is not None and (type(value.voltage_mv) is not int or not 1 <= value.voltage_mv <= 65535))
             or (value.percent is not None and (type(value.percent) is not int or not 0 <= value.percent <= 100))):
@@ -127,17 +131,26 @@ def validate_readings(values, plugin_id):
 
 
 class ProviderRegistry:
-    """One serial worker owns instances; UI only updates desired configuration.
+    """Serial host worker, isolated external processes, bounded JSON IPC.
 
-    Exceptions are contained, but hangs/native crashes are NOT. No forced timeout.
+    Plugins retain the user's privileges. This is fault containment, not sandboxing.
     """
-    def __init__(self, builtin, config_path=None):
+    def __init__(self, builtin, config_path=None, *, timeout=2.0, close_timeout=0.25,
+                 backoff=1.0, poll_budget=5.0):
         self.builtin = builtin
         self.config_path = Path(config_path) if config_path else plugins_path()
         self._specs = load_config(self.config_path)
         self._lock = threading.Lock()
         self._instances = {}
         self.errors = {}
+        self.timeout = timeout
+        self.close_timeout = close_timeout
+        self.backoff = backoff
+        self.poll_budget = poll_budget
+        self._failures = {}
+        self._generation = 0
+        self._closed = False
+        self._workers = set()
 
     def list_plugins(self):
         with self._lock:
@@ -146,6 +159,7 @@ class ProviderRegistry:
     def _save(self, specs):
         save_config(self.config_path, specs)
         self._specs = specs
+        self._generation += 1
 
     def add(self, manifest):
         spec, _, _ = inspect_manifest(manifest)
@@ -155,7 +169,7 @@ class ProviderRegistry:
             self._save([*self._specs, spec])
         return spec
 
-    def enable(self, ident, enabled):
+    def enable(self, ident, enabled, *, expected_digest=None):
         if type(enabled) is not bool:
             raise ValueError('enabled must be boolean')
         with self._lock:
@@ -164,6 +178,8 @@ class ProviderRegistry:
                 new, _, _ = inspect_manifest(old.manifest)
                 if new.id != old.id:
                     raise ValueError('Manifest id changed; remove and add again')
+                if expected_digest is not None and new.digest != expected_digest:
+                    raise ValueError('Plugin changed during confirmation; review and try again')
                 new = replace(new, enabled=True)
             else:
                 new = replace(old, enabled=False)
@@ -178,79 +194,112 @@ class ProviderRegistry:
             return True
         return any(device_id.startswith(f'plugin:{s.id}:') for s in self.list_plugins() if s.enabled)
 
-    def _close_instance(self, ident):
+    def _close_instance(self, ident, timeout=None):
         item = self._instances.pop(ident, None)
         if item:
-            _, instance, module_name = item
-            try:
-                close = getattr(instance, 'close', None)
-                if callable(close):
-                    close()
-            except BaseException as exc:
-                self.errors[ident] = 'close: ' + type(exc).__name__
-            finally:
-                sys.modules.pop(module_name, None)
+            error = item[1].close(self.close_timeout if timeout is None else timeout)
+            with self._lock:
+                self._workers.discard(item[1])
+            if error:
+                self.errors[ident] = 'close: ' + error
 
-    def _load(self, spec):
-        checked, source, content = inspect_manifest(spec.manifest)
-        if checked.id != spec.id or checked.digest != spec.digest:
-            raise ValueError('Plugin changed; disable, review, and enable again')
-        module_name = '_battery_dock_plugin_' + spec.id.replace('.', '_').replace('-', '_') + '_' + spec.digest
-        module = types.ModuleType(module_name)
-        module.__file__ = str(source)
-        sys.modules[module_name] = module
-        instance = None
+    def _load(self, spec, timeout=None):
+        worker = PluginProcess()
+        with self._lock:
+            if self._closed:
+                raise RuntimeError('Registry closed')
+            self._workers.add(worker)
         try:
-            exec(compile(content, str(source), 'exec'), module.__dict__)
-            factory = getattr(module, 'create_provider', None)
-            if not callable(factory):
-                raise ValueError('Missing create_provider()')
-            instance = factory()
-            if not callable(getattr(instance, 'poll', None)):
-                raise ValueError('Provider needs poll()')
-            return spec, instance, module_name
+            worker.start(spec, self.timeout if timeout is None else timeout)
+            return spec, worker, None
         except BaseException:
-            # Always remove partial imports, including on plugin SystemExit/KeyboardInterrupt.
-            if instance is not None:
-                try:
-                    close = getattr(instance, 'close', None)
-                    if callable(close):
-                        close()
-                except BaseException:
-                    pass
-            sys.modules.pop(module_name, None)
+            worker.stop()
+            with self._lock:
+                self._workers.discard(worker)
             raise
 
     def poll(self):
         self.errors = {}
-        wanted = {s.id: s for s in self.list_plugins() if s.enabled}
-        for ident, (spec, _, _) in list(self._instances.items()):
-            if wanted.get(ident) != spec:
-                self._close_instance(ident)
+        if self._closed:
+            return []
+        with self._lock:
+            poll_generation = self._generation
+            wanted = {s.id: s for s in self._specs if s.enabled}
         readings = []
+        # Built-ins always run first, including when external cleanup hangs.
         try:
-            readings.extend(self.builtin.poll())
+            if self.builtin is not None:
+                readings.extend(self.builtin.poll())
         except Exception as exc:
             self.errors['builtin'] = type(exc).__name__
+        deadline = time.monotonic() + self.poll_budget
+        for ident, (spec, _, epoch) in list(self._instances.items()):
+            if wanted.get(ident) != spec or epoch != poll_generation:
+                self._close_instance(ident, min(self.close_timeout, max(0, deadline - time.monotonic())))
         for ident, spec in wanted.items():
-            # Built-in/previous polls may have taken time. Do not execute a stale
-            # desired configuration after the UI disabled, removed or updated it.
-            if spec not in self.list_plugins():
+            with self._lock:
+                generation = self._generation
+                current = spec in self._specs
+            if not current or self._closed:
                 self._close_instance(ident)
+                continue
+            failure = self._failures.get(ident)
+            if failure and failure[0] == (spec, generation) and time.monotonic() < failure[2]:
+                self.errors[ident] = failure[3]
+                continue
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self.errors[ident] = 'PollBudgetExceeded'
                 continue
             try:
                 if ident not in self._instances:
-                    self._instances[ident] = self._load(spec)
-                if spec not in self.list_plugins():
+                    loaded = self._load(spec, min(self.timeout, remaining))
+                    self._instances[ident] = (loaded[0], loaded[1], generation)
+                with self._lock:
+                    current = spec in self._specs and generation == self._generation
+                if not current or self._closed:
                     self._close_instance(ident)
                     continue
-                readings.extend(validate_readings(self._instances[ident][1].poll(), ident))
-            except BaseException as exc:
-                # No exception message/path/serial in UI diagnostics.
-                self.errors[ident] = type(exc).__name__
-        return [r for r in readings if self.accepts_reading(r.device_id)]
+                response = self._instances[ident][1].request(
+                    {'op': 'poll'}, min(self.timeout, max(0, deadline - time.monotonic())))
+                values = response.get('readings')
+                if not isinstance(values, list) or len(values) > MAX_READINGS:
+                    raise ValueError('Invalid worker response')
+                validated = validate_readings([DeviceReading(**value) for value in values], ident)
+                with self._lock:
+                    current = spec in self._specs and generation == self._generation
+                if current and not self._closed:
+                    readings.extend(validated)
+                    self._failures.pop(ident, None)
+                else:
+                    self._close_instance(ident)
+            except Exception as exc:
+                error = exc.error if isinstance(exc, PluginFailure) else type(exc).__name__
+                self.errors[ident] = error
+                item = self._instances.pop(ident, None)
+                if item:
+                    item[1].stop()
+                    with self._lock:
+                        self._workers.discard(item[1])
+                count = failure[1] + 1 if failure and failure[0] == (spec, generation) else 1
+                self._failures[ident] = ((spec, generation), count,
+                    time.monotonic() + min(60.0, self.backoff * 2 ** min(count - 1, 10)), error)
+        with self._lock:
+            unchanged = poll_generation == self._generation and not self._closed
+            enabled = {s.id for s in self._specs if s.enabled}
+            return [r for r in readings if not r.device_id.startswith('plugin:') or
+                    (unchanged and r.device_id.split(':')[1] in enabled)]
+
+    def force_stop(self):
+        """Cancel all external children, including in-progress startup, from UI exit."""
+        with self._lock:
+            self._closed = True
+            workers = list(self._workers)
+        for worker in workers:
+            worker.stop(wait=0)
 
     def close(self):
+        self._closed = True
         for ident in list(self._instances):
             self._close_instance(ident)
         try:
@@ -259,3 +308,107 @@ class ProviderRegistry:
                 close()
         except Exception:
             pass
+
+
+class PluginFailure(Exception):
+    def __init__(self, error):
+        self.error = error
+        super().__init__(error)
+
+
+class PluginProcess:
+    """One child. Parent never unpickles plugin-controlled objects."""
+    def __init__(self):
+        self.process = None
+        self.connection = None
+        self.closed = False
+        self.buffer = b''
+        self._process_lock = threading.Lock()
+
+    def start(self, spec, timeout):
+        deadline = time.monotonic() + timeout
+        token = secrets.token_hex(32)
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', 0))
+            listener.listen(1)
+            port = str(listener.getsockname()[1])
+            if getattr(sys, 'frozen', False):
+                command = [sys.executable, '--plugin-worker', port, token]
+            else:
+                command = [sys.executable, '-m', 'battery_dock.plugin_worker', port, token]
+            with self._process_lock:
+                if self.closed:
+                    raise RuntimeError('Worker closed')
+                self.process = subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    cwd=str(Path(__file__).resolve().parent.parent),
+                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            listener.settimeout(max(0.001, deadline - time.monotonic()))
+            self.connection, _ = listener.accept()
+        response = self.receive(deadline)
+        if response != {'token': token}:
+            raise ValueError('Invalid worker handshake')
+        self.request({'op': 'load', 'spec': asdict(spec), 'parent_pid': os.getpid()},
+                     deadline - time.monotonic())
+
+    def receive(self, deadline):
+        from .plugin_worker import MAX_MESSAGE
+        while b'\n' not in self.buffer:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('Plugin deadline')
+            self.connection.settimeout(remaining)
+            chunk = self.connection.recv(65536)
+            if not chunk:
+                raise PluginFailure('WorkerExited')
+            self.buffer += chunk
+            if len(self.buffer) > MAX_MESSAGE:
+                raise ValueError('Oversized worker response')
+        line, self.buffer = self.buffer.split(b'\n', 1)
+        response = json.loads(line)
+        if not isinstance(response, dict):
+            raise ValueError('Invalid worker response')
+        if 'error' in response:
+            error = response['error']
+            if not isinstance(error, str) or not error.isidentifier() or len(error) > 80:
+                raise ValueError('Invalid error type')
+            raise PluginFailure(error)
+        return response
+
+    def request(self, value, timeout):
+        if timeout <= 0:
+            raise TimeoutError('Plugin deadline')
+        deadline = time.monotonic() + timeout
+        self.connection.settimeout(timeout)
+        self.connection.sendall(json.dumps(value).encode() + b'\n')
+        return self.receive(deadline)
+
+    def stop(self, wait=0.25):
+        with self._process_lock:
+            self.closed = True
+            if self.connection is not None:
+                self.connection.close()
+                self.connection = None
+            process = self.process
+            if process is not None and process.poll() is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+        if process is not None:
+            try:
+                process.wait(timeout=wait)
+            except subprocess.TimeoutExpired:
+                # OS teardown is outside our control; don't block the UI worker.
+                threading.Thread(target=process.wait, daemon=True).start()
+
+    def close(self, timeout):
+        error = None
+        try:
+            if self.connection is not None and self.process.poll() is None:
+                self.request({'op': 'close'}, timeout)
+        except Exception as exc:
+            error = exc.error if isinstance(exc, PluginFailure) else type(exc).__name__
+        finally:
+            self.stop()
+        return error

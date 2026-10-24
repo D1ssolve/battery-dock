@@ -11,6 +11,22 @@ from scripts import package_windows as packaging
 
 
 class PackagingTests(unittest.TestCase):
+    def test_release_version_requires_stable_numeric_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'battery_dock').mkdir()
+            for version, valid in [('0.4.0', True), ('1.20.3', True),
+                                   ('../bad', False), ('0.4.0-rc1', False),
+                                   ('0.4', False), ('v0.4.0', False)]:
+                with self.subTest(version=version), patch.object(packaging, 'ROOT', root):
+                    (root / 'battery_dock/__init__.py').write_text(
+                        f"__version__ = '{version}'\n", encoding='utf-8')
+                    if valid:
+                        self.assertEqual(packaging.package_version(), version)
+                    else:
+                        with self.assertRaises(ValueError):
+                            packaging.package_version()
+
     def test_download_rejects_untrusted_locations(self):
         for url in ('http://pypi.org/file', 'https://example.com/file', 'file:///tmp/source'):
             with self.subTest(url=url), self.assertRaises(ValueError):
@@ -78,8 +94,9 @@ class PackagingTests(unittest.TestCase):
                 (root / name).mkdir(parents=True, exist_ok=True)
             for name in ('run.py', 'requirements.txt', 'requirements-build.txt',
                          'build-windows.cmd', 'build-windows.ps1', 'run-windows.cmd',
-                         'README.md', 'README.en.md', 'CONTRIBUTING.md', 'LICENSE', '.gitignore', 'LICENSE.txt', 'tcl/tcl8.6/license.terms'):
+                         'README.md', 'README.en.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'SUPPORT.md', 'ROADMAP.md', 'LICENSE', '.gitignore', 'LICENSE.txt', 'tcl/tcl8.6/license.terms'):
                 (root / name).write_text('fixture', encoding='utf-8')
+            (root / 'battery_dock/__init__.py').write_text("__version__ = '0.4.0'\n")
             (root / 'dist/BatteryDock.exe').write_bytes(b'MZfixture-not-an-executable')
             (root / '.github/workflow.yml').write_text('fixture', encoding='utf-8')
             with patch.object(packaging, 'ROOT', root), patch.object(packaging.sys, 'platform', 'win32'), patch.object(
@@ -88,10 +105,15 @@ class PackagingTests(unittest.TestCase):
                 packaging, 'dependency_source', return_value={'source': 'fixture'}
             ):
                 archive = packaging.package()
+            self.assertEqual(archive.name, 'BatteryDock-0.4.0-Windows-x64.zip')
+            self.assertEqual(archive.with_suffix('.zip.sha256').read_text().strip(),
+                             f'{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}')
             with zipfile.ZipFile(archive) as bundle:
-                prefix = 'BatteryDock-Windows-x64/'
+                prefix = 'BatteryDock-0.4.0-Windows-x64/'
+                self.assertEqual(json.loads(bundle.read(prefix + 'BUILD-INFO.json'))['version'], '0.4.0')
                 for path in ('BatteryDock.exe', 'LICENSE', 'source/run.py',
-                             'source/.github/workflow.yml', 'README.en.md', 'CONTRIBUTING.md', 'source/README.en.md', 'third-party-notices/Python-LICENSE.txt',
+                             'source/.github/workflow.yml', 'CHANGELOG.md', 'SUPPORT.md', 'ROADMAP.md',
+                             'source/CHANGELOG.md', 'source/SUPPORT.md', 'source/ROADMAP.md', 'README.en.md', 'CONTRIBUTING.md', 'source/README.en.md', 'third-party-notices/Python-LICENSE.txt',
                              'third-party-notices/Tcl-Tk/tcl8.6/license.terms', 'BUILD-INFO.json', 'SHA256SUMS.txt'):
                     self.assertIn(prefix + path, bundle.namelist())
                 for line in bundle.read(prefix + 'SHA256SUMS.txt').decode().splitlines():

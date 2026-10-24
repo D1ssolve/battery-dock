@@ -13,7 +13,7 @@ Selecting a manifest only registers a disabled plugin. Enabling it requires conf
 1. Obtain and review the plugin's source and manifest. Keep them in a stable local folder; do not move the folder while it is registered.
 2. Open **«Плагины» (Plugins)** in Battery Dock and add its JSON manifest. Adding does not execute its Python code.
 3. Select the plugin, enable it, and confirm the full-privilege warning only if you trust it.
-4. Use Disable to stop future polls and remove its readings and tray icons. Disable a broken plugin, then restart the application if its code is stuck.
+4. Use Disable to stop future polls and remove its readings and tray icons. A timed-out worker is terminated; disable a broken plugin to stop retries.
 
 Plugin registration and enablement are stored separately from display preferences in `%APPDATA%\BatteryDock\plugins.json` (next to `settings.json`; the non-Windows fallback is `~/.config/BatteryDock/`). Do not share this file without reviewing its local paths.
 
@@ -89,7 +89,9 @@ Names and details appear in the UI and may be included in exported diagnostics. 
 
 ## Lifecycle, errors, and responsiveness
 
-Providers are polled sequentially on the application's single background worker, not on the tkinter thread. The host catches ordinary plugin loading, polling, and cleanup exceptions so another provider can continue, without reporting arbitrary exception payloads. This is **not process isolation**. A native crash, endless loop, blocked import, blocked constructor, or blocked `poll()`/`close()` can affect the whole application. A disable or shutdown cannot interrupt an in-flight plugin call.
+Since 0.4.0, each enabled external plugin runs in a separate child process; built-in providers are polled first by the background coordinator, not the tkinter thread. Localhost token-authenticated JSON IPC is used instead of pickle. Import/construction and each poll have a 2-second worker deadline; cleanup gets 0.25 seconds before termination/reaping. External polling and graceful cleanup share a 5-second protocol budget; bounded OS terminate/reap waits (0.25 seconds each) are separate. A failure, timeout or crash removes that worker, reports a sanitized error, and retries on future refreshes with exponential 1–60 second backoff. Disable/remove/re-enable races discard stale results; approved manifest/entrypoint hashes are checked again in the child on each poll.
+
+This is **fault containment, not a security sandbox**. Workers retain the user's full privileges; they can access files/network and spawn descendants. Unmanaged descendants are not contained, and code already executed cannot be undone. Built-in native HID code remains in the main process. Windows frozen-process behavior must be checked against the exact build's CI; real USB/sleep/resume behavior requires separate hardware testing.
 
 Set finite read/write timeouts in your own hardware operations and bound retries. Do not create unmanaged background threads. Release handles in `close()`. Do not depend on being called at a precise interval, and expect disconnects, sleep/wake, permission failures, busy handles, and malformed replies. Treat unavailable battery data explicitly as unknown.
 
