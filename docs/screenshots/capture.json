@@ -1,0 +1,24 @@
+{
+  "application_version": "0.4.0",
+  "source_commit": "55d50d226e370af68a049d19dd13b6d03aeeb31c",
+  "platform": "Windows-2025Server-10.0.26100-SP0",
+  "python": "3.12.10",
+  "pillow": "12.3.0",
+  "capture": "Actual Windows Tk windows, including native title bars; unedited screen pixels.",
+  "data": "Built-in DemoProvider only; simulated 76% and 18%, not hardware measurements.",
+  "settings": "Fresh temporary APPDATA; notifications disabled to avoid demo toast overlays. No preferences saved through UI.",
+  "images": [
+    {
+      "file": "dashboard-demo.png",
+      "width": 792,
+      "height": 622,
+      "sha256": "069629e88fa67f52cef5815acbd14f6956bcfa6b6c94a5875d6186adbedb01cd"
+    },
+    {
+      "file": "settings-demo.png",
+      "width": 398,
+      "height": 350,
+      "sha256": "c5bcd124365208a42969d735a18de2afd1e4debcbedeb17f39519869ac1d997e"
+    }
+  ]
+}

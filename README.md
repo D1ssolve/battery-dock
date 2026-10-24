@@ -36,9 +36,15 @@ Battery Dock — независимое приложение с открытым
 
 ## Скриншоты
 
-<!-- Screenshots are inserted here after capture and visual verification. -->
-На скриншотах — **DEMO, смоделированные показания**, не измерения реальных устройств.
-Такой же режим можно открыть командой `python -m battery_dock --demo`.
+![Battery Dock: окно с демонстрационными показаниями G733 и Aerox 9](docs/screenshots/dashboard-demo.png)
+
+*Окно приложения в DEMO-режиме: смоделированные значения, не измерения устройств.*
+
+![Battery Dock: настройки интервала опроса, предупреждений и автозапуска](docs/screenshots/settings-demo.png)
+
+*Настройки русскоязычного интерфейса. Реальные снимки приложения на Windows CI.*
+
+Такой же DEMO-режим можно открыть командой `python -m battery_dock --demo`.
 
 ## Скачать и запустить
 

@@ -36,9 +36,15 @@ The interface is currently **Russian-language**.
 
 ## Screenshots
 
-<!-- Screenshots are inserted here after capture and visual verification. -->
-Screenshots use **DEMO / simulated readings**, not measurements from real devices.
-You can inspect the same interface locally with `python -m battery_dock --demo`.
+![Battery Dock dashboard showing simulated G733 and Aerox 9 readings](docs/screenshots/dashboard-demo.png)
+
+*Dashboard in DEMO mode: simulated values, not measurements from devices.*
+
+![Battery Dock settings for polling, notifications and autostart](docs/screenshots/settings-demo.png)
+
+*Settings in the Russian-language interface. Actual application captures on Windows CI.*
+
+You can inspect the same demo interface locally with `python -m battery_dock --demo`.
 
 ## Download and run
 
