@@ -1,5 +1,6 @@
 """Offline checks for the Windows bundle helper (no external downloads)."""
 import hashlib
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -32,6 +33,36 @@ class PackagingTests(unittest.TestCase):
                 packaging, 'download', side_effect=[json.dumps({'urls': [item]}).encode(), content]
             ), self.assertRaises(RuntimeError):
                 packaging.dependency_source('example', Path(directory))
+
+    def test_pystray_pure_python_wheel_fallback(self):
+        for variant in ('valid', 'missing_source', 'native', 'bad_hash', 'other_package'):
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as directory:
+                buffer = io.BytesIO()
+                with zipfile.ZipFile(buffer, 'w') as archive:
+                    if variant != 'missing_source':
+                        archive.writestr('pystray/__init__.py', '# source')
+                    archive.writestr('pystray-0.19.5.dist-info/LICENSE', 'license fixture')
+                    if variant == 'native':
+                        archive.writestr('pystray/native.pyd', b'native')
+                content = buffer.getvalue()
+                item = {'packagetype': 'bdist_wheel',
+                        'filename': 'pystray-0.19.5-py2.py3-none-any.whl',
+                        'url': 'https://files.pythonhosted.org/pystray.whl',
+                        'digests': {'sha256': hashlib.sha256(content).hexdigest()}}
+                if variant == 'bad_hash':
+                    item['digests']['sha256'] = 'incorrect'
+                with patch.object(packaging.metadata, 'version', return_value='0.19.5'), patch.object(
+                    packaging, 'download', side_effect=[json.dumps({'urls': [item]}).encode(), content]
+                ):
+                    if variant == 'valid':
+                        result = packaging.dependency_source('pystray', Path(directory))
+                        self.assertEqual(result['archive_type'], 'pure-python-wheel')
+                        self.assertEqual((Path(directory) / item['filename']).read_bytes(), content)
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            packaging.dependency_source(
+                                'other' if variant == 'other_package' else 'pystray', Path(directory))
+                        self.assertEqual(list(Path(directory).iterdir()), [])
 
     def test_no_source_distribution_fails_closed(self):
         with patch.object(packaging.metadata, 'version', return_value='1.0'), patch.object(

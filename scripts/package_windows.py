@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.metadata as metadata
+import io
 import json
 import os
 from pathlib import Path
@@ -35,6 +36,12 @@ def dependency_source(name: str, destination: Path) -> dict:
     endpoint = f'https://pypi.org/pypi/{urllib.parse.quote(name)}/{urllib.parse.quote(version)}/json'
     release = json.loads(download(endpoint))
     candidates = [item for item in release['urls'] if item['packagetype'] == 'sdist']
+    wheel_fallback = False
+    if not candidates and name.lower() == 'pystray':
+        candidates = [item for item in release['urls']
+                      if item['packagetype'] == 'bdist_wheel'
+                      and item['filename'].endswith('-none-any.whl')]
+        wheel_fallback = bool(candidates)
     if not candidates:
         raise RuntimeError(f'No source distribution found for {name}=={version}')
     item = candidates[0]
@@ -45,8 +52,17 @@ def dependency_source(name: str, destination: Path) -> dict:
     digest = hashlib.sha256(payload).hexdigest()
     if digest != item['digests']['sha256']:
         raise RuntimeError(f'Source archive hash mismatch: {filename}')
+    if wheel_fallback:
+        # pystray publishes a pure-Python wheel but no sdist. Preserve the
+        # complete wheel, including upstream license files, as source data.
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            names = archive.namelist()
+            if ('pystray/__init__.py' not in names
+                    or any(entry.lower().endswith(('.pyd', '.so', '.dll')) for entry in names)):
+                raise RuntimeError('pystray wheel does not contain pure-Python source')
     (destination / filename).write_bytes(payload)
-    return {'name': name, 'version': version, 'source': item['url'], 'sha256': digest}
+    return {'name': name, 'version': version, 'source': item['url'], 'sha256': digest,
+            'archive_type': 'pure-python-wheel' if wheel_fallback else 'sdist'}
 
 
 def package() -> Path:
@@ -113,8 +129,9 @@ def package() -> Path:
         'Battery Dock is GPL-3.0-only. See LICENSE and docs/PROTOCOLS.md for attribution.\n'
         'This bundle includes application source and build scripts in source/.\n'
         'Dependency license texts and package metadata are in third-party-notices/.\n'
-        'Exact source distributions of HIDAPI, Pillow, pystray, six and PyInstaller\n'
-        'are in third-party-source/. These archives also contain upstream notices.\n'
+        'Source archives of HIDAPI, Pillow, pystray, six and PyInstaller\n'
+        'are in third-party-source/ (pystray may be a complete pure-Python wheel).\n'
+        'These archives also contain upstream notices.\n'
         'Rebuild instructions: source/README.md; exact build environment versions:\n'
         'requirements-resolved.txt. Dependencies retain their own licenses.\n'
         'Python and Tcl/Tk license texts are included in third-party-notices/.\n'
