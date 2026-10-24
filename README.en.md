@@ -17,8 +17,8 @@ a dark dashboard brings readings, calibration and preferences together.
 The interface is currently **Russian-language**.
 
 > **0.4 is an early prototype, not a stable hardware-certified product.** The EXE is
-> unsigned. G733 percentages are voltage-based estimates, and Aerox 9 hardware
-> readings still need confirmation across revisions. Demo screenshots and passing
+> unsigned. G733 percentages are voltage-based estimates. Aerox 9 receiver reading was
+> confirmed by a user on 0.2; accuracy across charge levels/revisions remains unverified. Demo screenshots and passing
 > CI do not prove real-device compatibility. Never disable SmartScreen or antivirus.
 
 ## At a glance
@@ -68,7 +68,7 @@ required. GitHub's automatic source ZIP does not contain the executable.
 | Device | Connection | Reading and evidence |
 | --- | --- | --- |
 | Logitech G733 | Original USB receiver, HID++ | Voltage-derived estimate; optional local calibration. Not an exact OEM percentage. |
-| SteelSeries Aerox 9 Wireless | Original 2.4 GHz USB receiver | Protocol uses 5% steps. Initial 0.1.0 hardware test failed; later HID fixes require hardware confirmation. |
+| SteelSeries Aerox 9 Wireless | Original 2.4 GHz USB receiver | Receiver reading confirmed by a user on 0.2 (100%, not charging). Protocol uses 5% steps; broader accuracy/firmware testing remains open. |
 | Other devices | Local provider plugin | Depends on the plugin; no generic compatibility claim. |
 
 Bluetooth Battery Service, arbitrary receivers and firmware modification are not

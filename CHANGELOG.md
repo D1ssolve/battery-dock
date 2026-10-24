@@ -28,6 +28,9 @@ for downloadable assets and the exact tested commit. Все версии пок�
 
 ## 0.2.0
 
+- User confirmed initial Aerox 9 receiver readings (100%, not charging); charge-range,
+  charging, revision and sleep/resume validation remain separate tasks.
+
 - Local, opt-in provider plugin API and management window.
 - Manifest/entrypoint approval digests, disabled-by-default registration and DEMO provider.
 - Frozen executable plugin smoke checks and contributor/protocol documentation.

@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from battery_dock.core import DeviceReading
-from battery_dock.plugins import ProviderRegistry, PluginProcess
+from battery_dock.plugins import ProviderRegistry, PluginProcess, PluginFailure
 
 SOURCE = '''from battery_dock.core import DeviceReading
 class Provider:
@@ -165,6 +165,30 @@ if not marker.exists():
         self.addCleanup(registry.close)
         self.assertEqual(registry.poll(), [])
         self.assertEqual(registry.errors, {})
+
+    def test_transport_closure_is_normalized_but_timeout_is_preserved(self):
+        for error in (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+            for operation in ('sendall', 'recv'):
+                with self.subTest(error=error.__name__, operation=operation):
+                    worker = PluginProcess()
+                    worker.connection = Mock()
+                    getattr(worker.connection, operation).side_effect = error()
+                    with self.assertRaises(PluginFailure) as caught:
+                        worker.request({'op': 'poll'}, 1)
+                    self.assertEqual(caught.exception.error, 'WorkerExited')
+        worker = PluginProcess()
+        worker.connection = Mock()
+        worker.connection.recv.return_value = b''
+        with self.assertRaises(PluginFailure) as caught:
+            worker.request({'op': 'poll'}, 1)
+        self.assertEqual(caught.exception.error, 'WorkerExited')
+        for operation in ('sendall', 'recv'):
+            with self.subTest(timeout=operation):
+                worker = PluginProcess()
+                worker.connection = Mock()
+                getattr(worker.connection, operation).side_effect = TimeoutError()
+                with self.assertRaises(TimeoutError):
+                    worker.request({'op': 'poll'}, 1)
 
     def test_protocol_rejects_invalid_json_shapes_and_oversize(self):
         from battery_dock.plugin_worker import MAX_MESSAGE

@@ -3,7 +3,8 @@
 Battery Dock sends only allowlisted battery query reports. It does not change
 DPI, illumination, pairing, firmware, sound settings or device configuration.
 No G HUB / SteelSeries GG API, network service or administrator access is required
-by the design. Real Windows device access remains to be tested on the user's hardware.
+by the design. An initial Aerox 9 receiver read was user-confirmed on 0.2; broader Windows
+hardware coverage remains open (see HARDWARE.md).
 
 ## Logitech G733
 

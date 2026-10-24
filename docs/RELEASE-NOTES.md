@@ -20,8 +20,9 @@
 Unsigned Windows 11 x64 prototype, not a validated installer. Do not disable
 SmartScreen or antivirus. SHA-256 checksums are not publisher signatures.
 G733 percentages remain estimates; calibration fits manually entered references,
-not physical battery capacity. Aerox 9 revisions/firmware and real HID behavior
-still need hardware verification. CI/demo tests do not prove interactive Windows
+not physical battery capacity. A user confirmed an Aerox 9 receiver reading on
+0.2 (100%, not charging); charge-range accuracy, charging, other revisions and
+sleep/resume still need verification. CI/demo tests do not prove interactive Windows
 usability, physical-device accuracy or sleep/resume reliability. See the bundled
 `docs/WINDOWS-CHECKLIST.md` and the exact commit's Actions results.
 

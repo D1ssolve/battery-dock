@@ -358,7 +358,10 @@ class PluginProcess:
             if remaining <= 0:
                 raise TimeoutError('Plugin deadline')
             self.connection.settimeout(remaining)
-            chunk = self.connection.recv(65536)
+            try:
+                chunk = self.connection.recv(65536)
+            except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+                raise PluginFailure('WorkerExited') from None
             if not chunk:
                 raise PluginFailure('WorkerExited')
             self.buffer += chunk
@@ -380,7 +383,10 @@ class PluginProcess:
             raise TimeoutError('Plugin deadline')
         deadline = time.monotonic() + timeout
         self.connection.settimeout(timeout)
-        self.connection.sendall(json.dumps(value).encode() + b'\n')
+        try:
+            self.connection.sendall(json.dumps(value).encode() + b'\n')
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+            raise PluginFailure('WorkerExited') from None
         return self.receive(deadline)
 
     def stop(self, wait=0.25):
