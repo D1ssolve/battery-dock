@@ -4,6 +4,8 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import traceback
+from unittest.mock import patch
 
 
 def child():
@@ -11,7 +13,8 @@ def child():
     from battery_dock.demo import DemoProvider
     app = App(DemoProvider(), demo=True)
     errors = []
-    app.root.report_callback_exception = lambda kind, value, tb: errors.append(f'{kind.__name__}: {value}')
+    app.root.report_callback_exception = lambda kind, value, tb: errors.append(
+        'Tk callback failure:\n' + ''.join(traceback.format_exception(kind, value, tb)))
 
     def exercise():
         try:
@@ -25,19 +28,25 @@ def child():
             # Unchanged render keeps the existing widgets alive.
             cards = dict(app._card_widgets)
             app.render()
-            assert all(app._card_widgets[k][0] is row[0] for k, row in cards.items())
+            assert all(app._card_widgets[k][0] is row[0] for k, row in cards.items()), 'Unchanged render recreated a device card'
             app._watchdog_wall = 1
-            app.watchdog()
-            assert app.wakeup.is_set()
-            assert all(r.stale for r in app.readings.values() if r.connected)
+            # The real polling thread can consume/clear this event immediately.
+            # Observe the request, not the inherently racy event state afterward.
+            with patch.object(app.wakeup, 'set', wraps=app.wakeup.set) as request_poll:
+                app.watchdog()
+                assert request_poll.call_count == 1, 'Resume watchdog did not request exactly one immediate poll'
+            assert all(r.stale for r in app.readings.values() if r.connected), 'Resume watchdog left a connected device reading fresh'
             app.hide()
             app.show()
-            assert app.root.state() != 'withdrawn'
-        except Exception as error:
-            errors.append(str(error))
+            assert app.root.state() != 'withdrawn', 'Show did not restore the dashboard after hide'
+        except Exception:
+            errors.append('Lifecycle exercise failure:\n' + traceback.format_exc())
         finally:
-            app.quit()
-            app.quit()
+            try:
+                app.quit()
+                app.quit()
+            except Exception:
+                errors.append('Idempotent shutdown failure:\n' + traceback.format_exc())
 
     app.root.after(2500, exercise)
     app.run()

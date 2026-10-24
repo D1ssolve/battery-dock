@@ -21,7 +21,9 @@ Code signing requires a separate certificate/identity decision; no certificate i
    Publication refuses mismatched notes and uses the notes inside the tested ZIP.
 2. Review changes and run the test suite. Record actual Windows/hardware validation
    separately using [WINDOWS-CHECKLIST.md](WINDOWS-CHECKLIST.md).
-3. A normal push to `main` only builds/tests/uploads a 30-day Actions artifact.
+3. A normal push to `main`, or a pull request targeting `main`, only
+   builds/tests/uploads 30-day Actions artifacts. Pull requests use read-only
+   `pull_request` permissions, never `pull_request_target`, and cannot publish.
 4. To explicitly publish, either run **Build Windows EXE** on `main` with the
    `release` checkbox enabled, or push an intentionally approved release commit
    to `main` with `[release]` in its commit message. Do not use that marker casually.

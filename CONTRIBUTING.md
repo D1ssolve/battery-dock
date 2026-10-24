@@ -24,6 +24,13 @@ Distinguish direct device percentages from estimates. Mark voltage-derived value
 
 ## Pull requests
 
+Pull requests targeting `main` run the read-only Windows workflow, including tests,
+smoke checks, screenshot capture and packaging. It uses `pull_request`, never
+`pull_request_target`; fork submissions do not receive release credentials. A PR
+cannot publish a release: publishing requires an explicit release-marked push to
+`main` or an opted-in manual run on `main`. Passing CI is not hardware validation.
+
+
 1. Describe the user-visible change and the problem or device it addresses.
 2. Keep the patch focused; include tests and documentation for changed behavior.
 3. Record exact test commands/results and disclose unrun Windows GUI or physical-device checks.

@@ -63,6 +63,15 @@ not available, [successful CI runs](https://github.com/D1ssolve/battery-dock/act
 provide 30-day `BatteryDock-Windows-x64-<number>` artifacts; GitHub sign-in may be
 required. GitHub's automatic source ZIP does not contain the executable.
 
+### Updating a portable copy
+
+Choose **Exit** in a device menu before replacing the EXE or extracting a new
+version. Settings and calibration in `%APPDATA%\BatteryDock` are retained.
+Prefer the same installation folder so an enabled autostart entry keeps its path.
+If you move the app, the existing Windows Run entry still targets the old path:
+explicitly disable and re-enable autostart in the new copy. Updates are manual;
+there is no signed automatic updater.
+
 ## Devices and limits
 
 | Device | Connection | Reading and evidence |
