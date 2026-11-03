@@ -170,3 +170,9 @@ Windows CI запускает тесты, smoke-проверки Tk и един�
 [атрибуция](docs/PROTOCOLS.md). Вдохновлено BatteryOnPC, реализовано независимо,
 без его брендинга, дизайна и исходного кода. Проект не связан с BatteryOnPC,
 Logitech или SteelSeries; товарные знаки принадлежат их владельцам.
+
+### Сведения о Windows EXE
+
+Сборка включает ресурс VERSIONINFO, аналогичный [WTUI](https://github.com/D1ssolve/wtui/blob/main/cmd/wtui/winres/winres.json): разработчик `D1ssolve`, продукт `Battery Dock`, описание, copyright, исходное имя файла и версии файла/продукта из `battery_dock/__init__.py`. Посмотреть их можно в **BatteryDock.exe → Свойства → Подробно**. Локальная сборка и CI генерируют ресурс перед PyInstaller и проверяют поля готового EXE.
+
+Эти сведения **не являются цифровой подписью Authenticode**, не подтверждают доверенного издателя и не гарантируют запуск через Smart App Control. EXE остаётся неподписанным.

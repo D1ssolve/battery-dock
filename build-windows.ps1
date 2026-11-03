@@ -8,7 +8,10 @@ $python = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
 if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed.' }
 & $python -m unittest discover -s tests -v
 if ($LASTEXITCODE -ne 0) { throw 'Tests failed; build stopped.' }
-& $python -m PyInstaller --noconfirm --clean --onefile --windowed --name BatteryDock --collect-all pystray --hidden-import hid run.py
+& $python -m scripts.windows_version_info
+if ($LASTEXITCODE -ne 0) { throw 'Version resource generation failed.' }
+& $python -m PyInstaller --noconfirm --clean --onefile --windowed --name BatteryDock --version-file build/windows-version-info.txt --collect-all pystray --hidden-import hid run.py
 if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed.' }
+& .\scripts\verify_windows_metadata.ps1 -Python $python
 Write-Host "Built: $PSScriptRoot\dist\BatteryDock.exe"
 Write-Host 'The executable is unsigned. Review source before allowing it through SmartScreen.'
