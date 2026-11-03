@@ -79,8 +79,12 @@ jobs:
             docs/screenshots/capture.json
           if-no-files-found: error
           retention-days: 30
+      - name: Generate Windows version resource
+        run: python -m scripts.windows_version_info
       - name: Build standalone executable
-        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name BatteryDock --collect-all pystray --hidden-import hid run.py
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name BatteryDock --version-file build/windows-version-info.txt --collect-all pystray --hidden-import hid run.py
+      - name: Verify embedded EXE developer and version information
+        run: ./scripts/verify_windows_metadata.ps1
       - name: Smoke-test frozen executable without hardware
         run: |
           $report = Join-Path $env:RUNNER_TEMP 'battery-dock-demo.json'

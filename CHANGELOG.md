@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Embed developer and product VERSIONINFO in Windows builds, with release-derived versions and post-build verification. Descriptive metadata is not a digital signature or a Smart App Control exception.
+
 Changes are grouped by source version. A heading here does not imply that a binary
 release has been published; check [GitHub Releases](https://github.com/D1ssolve/battery-dock/releases)
 for downloadable assets and the exact tested commit. Все версии пока экспериментальные.

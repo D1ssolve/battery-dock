@@ -170,3 +170,9 @@ portable builds. G733 conversion is based on HeadsetControl's algorithm; see
 [protocol attribution](docs/PROTOCOLS.md). Inspired by BatteryOnPC, independently
 implemented without its branding, design or source code. Not affiliated with
 BatteryOnPC, Logitech or SteelSeries; their trademarks belong to their owners.
+
+### Windows executable details
+
+Builds embed Windows VERSIONINFO, like the resources in [WTUI](https://github.com/D1ssolve/wtui/blob/main/cmd/wtui/winres/winres.json): CompanyName `D1ssolve`, product `Battery Dock`, description, copyright, original filename and file/product versions derived from `battery_dock/__init__.py`. View them in **BatteryDock.exe → Properties → Details**. Local and CI builds generate the resource before PyInstaller and verify it in the final EXE.
+
+These descriptive fields are **not an Authenticode digital signature** and do not make an unknown publisher trusted or guarantee passage through Smart App Control. The executable remains unsigned.
